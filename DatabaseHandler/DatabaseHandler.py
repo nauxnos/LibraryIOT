@@ -126,8 +126,19 @@ class DatabaseHandler:
         self.commit()
         return True
 
-    def deleteUser(self, userID):
-        pass
+    def deleteUser(self, unUserID):
+        self.cursor.execute(
+        "SELECT UserName FROM User WHERE UserID = ?",
+        (unUserID,))
+        objResult = self.cursor.fetchone()
+        if objResult is None:
+            return False
+        # xoa ban ghi book borrow
+        self.cursor.execute(
+        "DELETE FROM User WHERE UserID = ?",
+        (unUserID, ))
+        self.commit()
+        return True
 
     def deleteBook(self, bookID):
         pass
