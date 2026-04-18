@@ -1,0 +1,10 @@
+{
+  "sensors": [
+    {"trig": 23, "echo": 24, "led": 18, "seatID": 1},
+    {"trig": 17, "echo": 27, "led": 12, "seatID": 2},
+    {"trig": 5,  "echo": 6,  "led": 25, "seatID": 3},
+    {"trig": 13, "echo": 19, "led": 22, "seatID": 4},
+    {"trig": 20, "echo": 21, "led": 4, "seatID": 5},
+    {"trig": 16, "echo": 26, "led": 14, "seatID": 6}
+  ]
+}
