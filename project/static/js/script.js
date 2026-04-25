@@ -16,6 +16,7 @@ const books=[
 ];
 
 function switchTab(t){
+  console.log('Switching to tab:',t);
   document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('active',i===(t==='login'?0:1)));
   document.getElementById('form-login').classList.toggle('active',t==='login');
   document.getElementById('form-signup').classList.toggle('active',t==='signup');
@@ -138,22 +139,129 @@ document.addEventListener('click',e=>{
   if(!e.target.closest('.nav-right'))document.getElementById('dropdown').classList.remove('open');
 });
 
+// function openManage(type){
+//   closeDropdown();
+//   const overlay=document.getElementById('modal-overlay');
+//   const body=document.getElementById('modal-body');
+//   const title=document.getElementById('modal-title-text');
+//   if(type==='seats'){
+//     title.textContent='Chỗ ngồi đã đặt';
+//     body.innerHTML=myBookings.length?myBookings.map(b=>`<div class="manage-item"><div class="manage-info"><strong>Chỗ ${b.seat}</strong><span>${b.date} · ${b.time}</span></div><button class="btn-cancel" onclick="cancelBooking('${b.seat}')">Hủy đặt</button></div>`).join(''):'<p style="color:var(--muted);font-size:14px;text-align:center;padding:2rem 0">Bạn chưa có đặt chỗ nào</p>';
+//   }else if(type==='books'){
+//     title.textContent='Sách đang mượn';
+//     body.innerHTML=myBorrows.length?myBorrows.map(b=>`<div class="manage-item"><div class="manage-info"><strong>${b.title}</strong><span>${b.author} · Hạn trả: ${b.due}</span></div><button class="btn-cancel" onclick="returnBook('${b.title}')">Trả sách</button></div>`).join(''):'<p style="color:var(--muted);font-size:14px;text-align:center;padding:2rem 0">Bạn chưa mượn sách nào</p>';
+//   }else{
+//     title.textContent='Sửa thông tin';
+//     body.innerHTML=`<div class="form-group" style="margin-bottom:1rem"><label style="font-size:12px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Họ và tên</label><input type="text" class="input-field" value="${userName}"/></div><div class="form-group" style="margin-bottom:1rem"><label style="font-size:12px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Email</label><input type="email" class="input-field" value="nguyen@email.com"/></div><div class="form-group" style="margin-bottom:1.5rem"><label style="font-size:12px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Mật khẩu mới</label><input type="password" class="input-field" placeholder="Để trống nếu không đổi"/></div><button class="btn-book" onclick="showToast('Đã lưu thông tin!');closeModal()">Lưu thay đổi</button>`;
+//   }
+//   overlay.classList.add('open');
+// }
+
 function openManage(type){
   closeDropdown();
-  const overlay=document.getElementById('modal-overlay');
-  const body=document.getElementById('modal-body');
-  const title=document.getElementById('modal-title-text');
-  if(type==='seats'){
-    title.textContent='Chỗ ngồi đã đặt';
-    body.innerHTML=myBookings.length?myBookings.map(b=>`<div class="manage-item"><div class="manage-info"><strong>Chỗ ${b.seat}</strong><span>${b.date} · ${b.time}</span></div><button class="btn-cancel" onclick="cancelBooking('${b.seat}')">Hủy đặt</button></div>`).join(''):'<p style="color:var(--muted);font-size:14px;text-align:center;padding:2rem 0">Bạn chưa có đặt chỗ nào</p>';
-  }else if(type==='books'){
-    title.textContent='Sách đang mượn';
-    body.innerHTML=myBorrows.length?myBorrows.map(b=>`<div class="manage-item"><div class="manage-info"><strong>${b.title}</strong><span>${b.author} · Hạn trả: ${b.due}</span></div><button class="btn-cancel" onclick="returnBook('${b.title}')">Trả sách</button></div>`).join(''):'<p style="color:var(--muted);font-size:14px;text-align:center;padding:2rem 0">Bạn chưa mượn sách nào</p>';
-  }else{
-    title.textContent='Sửa thông tin';
-    body.innerHTML=`<div class="form-group" style="margin-bottom:1rem"><label style="font-size:12px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Họ và tên</label><input type="text" class="input-field" value="${userName}"/></div><div class="form-group" style="margin-bottom:1rem"><label style="font-size:12px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Email</label><input type="email" class="input-field" value="nguyen@email.com"/></div><div class="form-group" style="margin-bottom:1.5rem"><label style="font-size:12px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Mật khẩu mới</label><input type="password" class="input-field" placeholder="Để trống nếu không đổi"/></div><button class="btn-book" onclick="showToast('Đã lưu thông tin!');closeModal()">Lưu thay đổi</button>`;
+
+  const overlay = document.getElementById('modal-overlay');
+  const body = document.getElementById('modal-body');
+  const title = document.getElementById('modal-title-text');
+
+  if(type === 'seats'){
+    title.textContent = 'Chỗ ngồi đã đặt';
+    body.innerHTML = renderSeats();
   }
+  else if(type === 'books'){
+    title.textContent = 'Sách đang mượn';
+    body.innerHTML = renderBooks();
+  }
+  else{
+    title.textContent = 'Sửa thông tin';
+    body.innerHTML = renderProfile();
+  }
+
   overlay.classList.add('open');
+}
+
+function renderSeats(){
+  if(!myBookings.length){
+    return `<p class="empty">Bạn chưa có đặt chỗ nào</p>`;
+  }
+
+  return myBookings.map(b => `
+    <div class="manage-item">
+      <div class="manage-info">
+        <strong>Chỗ ${b.seat}</strong>
+        <span>${b.date} · ${b.time}</span>
+      </div>
+      <button class="btn-cancel" onclick="cancelBooking('${b.seat}')">
+        Hủy
+      </button>
+    </div>
+  `).join('');
+}
+
+function renderBooks(){
+  if(!myBorrows.length){
+    return `<p class="empty">Bạn chưa mượn sách nào</p>`;
+  }
+  return myBorrows.map(b => `
+    <div class="manage-item">
+      <div class="manage-info">
+        <strong>${b.title}</strong>
+        <span>${b.author} · Hạn trả: ${b.due}</span>
+      </div>
+      <button class="btn-cancel" onclick="returnBook('${b.title}')">
+        Trả sách
+      </button>
+    </div>
+  `).join('');
+}
+
+function renderProfile(){
+  return `
+    <div class="form-group">
+      <label>Họ và tên</label>
+      <input type="text" class="input-field" id="user-name" value="${CURRENT_USER.name}" />
+    </div>
+
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" class="input-field" id="user-email" value="${CURRENT_USER.email}" readonly />
+    </div>
+
+    <div class="form-group">
+      <label>Mật khẩu mới</label>
+      <input type="password" class="input-field" id="user-password" placeholder="Để trống nếu không đổi" />
+    </div>
+
+    <button class="btn-book" onclick="saveProfile()">Lưu thay đổi</button>
+  `;
+}
+
+async function saveProfile(){
+  userName = document.querySelector('#user-name').value || userName;
+  userEmail = document.querySelector('#user-email').value || userEmail;
+  password = document.querySelector('#user-password').value;
+
+  const res = await fetch('/update-profile', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      name: userName,
+      email: userEmail,
+      password: password
+    })
+  });
+
+  const data = await res.json();
+  if (data.success) {
+      CURRENT_USER.name = userName;
+      CURRENT_USER.email = userEmail;
+      showToast('Cập nhật thông tin thành công!');
+      closeModal();
+  } else {
+      showToast('Cập nhật thông tin thất bại. Vui lòng thử lại.');
+  }  
+  showToast('Đã lưu thông tin!');
+  closeModal();
 }
 
 function cancelBooking(seat){
@@ -172,7 +280,12 @@ function returnBook(title){
 
 function closeModal(){document.getElementById('modal-overlay').classList.remove('open');}
 function closeDropdown(){document.getElementById('dropdown').classList.remove('open');}
-function doLogout(){closeDropdown();document.getElementById('screen-main').classList.remove('active');document.getElementById('screen-login').classList.add('active');showToast('Đã đăng xuất');}
+async function doLogout()
+{
+  closeDropdown();
+  await fetch("/logout");
+  window.location.href = "/";
+}
 
 function showToast(msg){
   const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');

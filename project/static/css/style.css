@@ -110,7 +110,7 @@
   .legend-dot.sel{background:var(--accent)}
   .booking-panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:2rem;margin-top:1.5rem}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-  .input-field{padding:10px 14px;border:1px solid var(--border);border-radius:9px;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--text);background:#fff;outline:none;width:100%;transition:border .2s}
+  .input-field{padding:10px 14px;border:1px solid var(--border);border-radius:9px;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--text);background:#fff;outline:none;width:440px !important;transition:border .2s}
   .input-field:focus{border-color:var(--accent)}
   .section-label{font-size:12px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:.6rem;display:block}
   .selected-info{font-size:14px;color:var(--accent);font-weight:500;margin-bottom:1rem;min-height:22px}
@@ -156,4 +156,10 @@
   .manage-info span{font-size:12px;color:var(--muted)}
   .btn-cancel{padding:6px 14px;background:#FCEBEB;color:#A32D2D;border:none;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;font-family:'DM Sans',sans-serif}
   .btn-cancel:hover{background:#F7C1C1}
+
+  .input-field[readonly] {
+  background-color: #f1f1f1;  /* xám nhẹ */
+  color: #888;                /* chữ xám */
+  cursor: not-allowed;        /* hiện dấu cấm */
+}
 </style>

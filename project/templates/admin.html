@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Panel - Thư Viện Số</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/admin-style.css') }}" />
+</head>
+<body>
+
+  <!-- Login Screen
+  <div id="admin-login" class="screen active">
+    <div class="admin-login-card">
+      <div class="admin-logo">
+        <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="48" height="48" rx="12" fill="#1A3D28"/>
+          <path d="M24 14l-8 6v12h16V20l-8-6z" fill="#C8A96E"/>
+          <circle cx="24" cy="22" r="3" fill="#fff"/>
+          <path d="M20 28h8v4h-8z" fill="#fff" opacity="0.8"/>
+        </svg>
+        <h1>Admin Panel</h1>
+        <p>Quản trị hệ thống thư viện</p>
+      </div>
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" placeholder="admin" id="admin-user" />
+      </div>
+      <div class="form-group">
+        <label>Mật khẩu</label>
+        <input type="password" placeholder="••••••••" id="admin-pass" />
+      </div>
+      <button class="btn-primary" onclick="adminLogin()">Đăng nhập</button>
+    </div>
+  </div> -->
+
+  <!-- Admin Dashboard -->
+  <div id="admin-dashboard" class="screen active">
+    
+    <!-- Sidebar -->
+    <div class="admin-sidebar">
+      <div class="sidebar-brand">
+        <svg viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" rx="8" fill="#2D5A3D"/>
+          <path d="M8 9.5h5c1.5 0 2.7 1.2 2.7 2.7v10.8c0-1.5-1.2-2.7-2.7-2.7H8V9.5z" fill="#C8A96E"/>
+          <path d="M24 9.5h-5c-1.5 0-2.7 1.2-2.7 2.7v10.8c0-1.5 1.2-2.7 2.7-2.7h5V9.5z" fill="rgba(255,255,255,.75)"/>
+        </svg>
+        <span>Admin</span>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <button class="nav-item active" onclick="showSection('dashboard')">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="6" height="6" rx="1"/>
+            <rect x="11" y="3" width="6" height="6" rx="1"/>
+            <rect x="3" y="11" width="6" height="6" rx="1"/>
+            <rect x="11" y="11" width="6" height="6" rx="1"/>
+          </svg>
+          Dashboard
+        </button>
+        
+        <button class="nav-item" onclick="showSection('layout')">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="2" width="16" height="16" rx="2"/>
+            <rect x="6" y="6" width="3" height="3" rx="0.5"/>
+            <rect x="11" y="6" width="3" height="3" rx="0.5"/>
+            <rect x="6" y="11" width="3" height="3" rx="0.5"/>
+            <rect x="11" y="11" width="3" height="3" rx="0.5"/>
+          </svg>
+          Layout Chỗ Ngồi
+        </button>
+        
+        <button class="nav-item" onclick="showSection('books')">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 3h9c.8 0 1.5.7 1.5 1.5v12c0 .8-.7 1.5-1.5 1.5H4"/>
+            <path d="M4 3A1.5 1.5 0 0 0 2.5 4.5v11c0 .8.7 1.5 1.5 1.5"/>
+            <path d="M7 7h5M7 10h4"/>
+          </svg>
+          Quản Lý Sách
+        </button>
+        
+        <button class="nav-item" onclick="showSection('pricing')">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="10" r="7"/>
+            <path d="M10 6v8M7 10h6"/>
+          </svg>
+          Giá Thuê
+        </button>
+        
+        <button class="nav-item" onclick="showSection('accounts')">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="7" r="3"/>
+            <path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6"/>
+          </svg>
+          Tài Khoản
+        </button>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <button class="btn-logout" onclick="adminLogout()">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3M11 11l3-3-3-3M14 8H6"/>
+          </svg>
+          Đăng xuất
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="admin-main">
+      
+      <!-- Dashboard Section -->
+      <section id="section-dashboard" class="admin-section active">
+        <div class="section-header">
+          <h2>Dashboard</h2>
+          <p>Tổng quan hệ thống</p>
+        </div>
+        
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon" style="background:#EAF3DE">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#3B6D11" stroke-width="2">
+                <circle cx="12" cy="8" r="4"/>
+                <path d="M4 20c0-4 3.5-7 8-7s8 3 8 7"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value" id="stat-users">0</div>
+              <div class="stat-label">Người dùng</div>
+            </div>
+          </div>
+          
+          <div class="stat-card">
+            <div class="stat-icon" style="background:#E6F1FB">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#1E5A8E" stroke-width="2">
+                <rect x="3" y="8" width="18" height="12" rx="2"/>
+                <path d="M7 8V6a4 4 0 0 1 8 0v2"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value" id="stat-bookings">0</div>
+              <div class="stat-label">Đặt chỗ</div>
+            </div>
+          </div>
+          
+          <div class="stat-card">
+            <div class="stat-icon" style="background:#FAEEDA">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#8B6F00" stroke-width="2">
+                <path d="M4 4h12c1 0 2 1 2 2v12c0 1-1 2-2 2H4"/>
+                <path d="M4 4c-1 0-2 1-2 2v12c0 1 1 2 2 2"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value" id="stat-books">0</div>
+              <div class="stat-label">Sách mượn</div>
+            </div>
+          </div>
+          
+          <div class="stat-card">
+            <div class="stat-icon" style="background:#FBEAF0">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#8B2252" stroke-width="2">
+                <circle cx="12" cy="12" r="8"/>
+                <path d="M12 8v4l3 2"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value" id="stat-seats">8</div>
+              <div class="stat-label">Tổng chỗ ngồi</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="recent-activity">
+          <h3>Hoạt động gần đây</h3>
+          <div class="activity-list" id="activity-list">
+            <div class="activity-item">
+              <div class="activity-icon">📚</div>
+              <div class="activity-content">
+                <strong>Nguyễn Văn A</strong> đã mượn sách "Đắc Nhân Tâm"
+                <span class="activity-time">5 phút trước</span>
+              </div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-icon">💺</div>
+              <div class="activity-content">
+                <strong>Trần Thị B</strong> đã đặt chỗ L-Top1
+                <span class="activity-time">12 phút trước</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+<!-- Layout Editor Section -->
+      <section id="section-layout" class="admin-section">
+        <div class="section-header">
+          <h2>Layout Chỗ Ngồi</h2>
+          <p>Vẽ và sắp xếp bàn ghế trong thư viện</p>
+        </div>
+        
+        <div class="layout-editor">
+          <div class="editor-toolbar">
+            <div class="toolbar-group">
+              <label class="toolbar-label">Hình dạng:</label>
+              <button class="tool-btn active" data-shape="rect" onclick="selectShape('rect')">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="5" width="14" height="10" rx="1"/>
+                </svg>
+                Chữ nhật
+              </button>
+              <button class="tool-btn" data-shape="circle" onclick="selectShape('circle')">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <circle cx="10" cy="10" r="6"/>
+                </svg>
+                Tròn
+              </button>
+              <button class="tool-btn" data-shape="roundrect" onclick="selectShape('roundrect')">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="5" width="14" height="10" rx="3"/>
+                </svg>
+                Bo góc
+              </button>
+            </div>
+            
+            <div class="toolbar-divider"></div>
+            
+            <div class="toolbar-group">
+              <label class="toolbar-label">Loại:</label>
+              <button class="tool-btn active" data-type="table" onclick="selectType('table')">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="4" y="7" width="12" height="6"/>
+                </svg>
+                Bàn
+              </button>
+              <button class="tool-btn" data-type="seat" onclick="selectType('seat')">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="6" y="9" width="8" height="6" rx="1"/>
+                  <path d="M7.5 9V7.5a2 2 0 0 1 4 0V9"/>
+                </svg>
+                Ghế
+              </button>
+            </div>
+            
+            <div class="toolbar-divider"></div>
+            
+            <div class="toolbar-group">
+              <label class="toolbar-label">Snap:</label>
+              <select class="snap-select" id="snap-grid" onchange="updateSnapGrid()">
+                <option value="1">1px (Tắt)</option>
+                <option value="5">5px</option>
+                <option value="10" selected>10px</option>
+                <option value="20">20px</option>
+                <option value="40">40px</option>
+              </select>
+            </div>
+            
+            <div class="toolbar-divider"></div>
+            
+            <button class="tool-btn" data-tool="select" onclick="selectTool('select')">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M3 3l6 14 2-6 6-2-14-6z"/>
+              </svg>
+              Chọn
+            </button>
+            
+            <button class="tool-btn" data-tool="delete" onclick="selectTool('delete')">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M6 6l8 8M14 6l-8 8"/>
+              </svg>
+              Xóa
+            </button>
+            
+            <button class="btn-save" onclick="saveLayout()" style="margin-left: auto;">💾 Lưu Layout</button>
+          </div>
+          
+          <div class="canvas-container">
+            <canvas id="layout-canvas" width="800" height="500"></canvas>
+          </div>
+          
+          <div class="layout-list">
+            <h4>Danh sách đối tượng</h4>
+            <div id="objects-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Books Management Section -->
+      <section id="section-books" class="admin-section">
+        <div class="section-header">
+          <h2>Quản Lý Sách</h2>
+          <p>Thêm, sửa, xóa sách trong thư viện</p>
+          <button class="btn-add" onclick="openBookModal()">+ Thêm Sách</button>
+        </div>
+        
+        <div class="search-box">
+          <input type="text" placeholder="Tìm kiếm sách..." id="book-search" oninput="filterBooksAdmin()"/>
+        </div>
+        
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Tên sách</th>
+                <th>Tác giả</th>
+                <th>Trạng thái</th>
+                <th>Lượt mượn</th>
+                <th>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody id="books-table-body">
+              <!-- Filled by JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Pricing Section -->
+      <section id="section-pricing" class="admin-section">
+        <div class="section-header">
+          <h2>Giá Thuê Chỗ Ngồi</h2>
+          <p>Thiết lập giá thuê theo khung giờ</p>
+        </div>
+        
+        <div class="pricing-grid">
+          <div class="price-card">
+            <div class="price-header">
+              <h3>Khung sáng</h3>
+              <span class="price-time">08:00 - 12:00</span>
+            </div>
+            <div class="price-input-group">
+              <span class="currency">₫</span>
+              <input type="number" class="price-input" value="15000" id="price-morning"/>
+              <span class="unit">/giờ</span>
+            </div>
+            <button class="btn-update" onclick="updatePrice('morning')">Cập nhật</button>
+          </div>
+          
+          <div class="price-card">
+            <div class="price-header">
+              <h3>Khung chiều</h3>
+              <span class="price-time">13:00 - 17:00</span>
+            </div>
+            <div class="price-input-group">
+              <span class="currency">₫</span>
+              <input type="number" class="price-input" value="20000" id="price-afternoon"/>
+              <span class="unit">/giờ</span>
+            </div>
+            <button class="btn-update" onclick="updatePrice('afternoon')">Cập nhật</button>
+          </div>
+          
+          <div class="price-card">
+            <div class="price-header">
+              <h3>Khung tối</h3>
+              <span class="price-time">17:00 - 21:00</span>
+            </div>
+            <div class="price-input-group">
+              <span class="currency">₫</span>
+              <input type="number" class="price-input" value="25000" id="price-evening"/>
+              <span class="unit">/giờ</span>
+            </div>
+            <button class="btn-update" onclick="updatePrice('evening')">Cập nhật</button>
+          </div>
+        </div>
+        
+        <div class="pricing-options">
+          <h3>Tùy chọn khác</h3>
+          <div class="option-row">
+            <label>
+              <input type="checkbox" id="weekend-surcharge" checked/>
+              Phụ thu cuối tuần (+30%)
+            </label>
+          </div>
+          <div class="option-row">
+            <label>
+              <input type="checkbox" id="student-discount" checked/>
+              Giảm giá sinh viên (15%)
+            </label>
+          </div>
+          <div class="option-row">
+            <label>
+              <input type="checkbox" id="member-discount"/>
+              Giảm giá thành viên (20%)
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Accounts Management Section -->
+      <section id="section-accounts" class="admin-section">
+        <div class="section-header">
+          <h2>Quản Lý Tài Khoản</h2>
+          <p>Xem và quản lý người dùng</p>
+        </div>
+        
+        <div class="search-box">
+          <input type="text" placeholder="Tìm kiếm người dùng..." id="account-search" oninput="filterAccounts()"/>
+        </div>
+        
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Họ tên</th>
+                <th>Email</th>
+                <th>Ngày tạo</th>
+                <th>Đặt chỗ</th>
+                <th>Mượn sách</th>
+                <th>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody id="accounts-table-body">
+              <!-- Filled by JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- Book Modal -->
+  <div class="modal-overlay" id="book-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="book-modal-title">Thêm Sách Mới</h3>
+        <button class="modal-close" onclick="closeBookModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Tên sách</label>
+          <input type="text" id="book-title" placeholder="Nhập tên sách"/>
+        </div>
+        <div class="form-group">
+          <label>Tác giả</label>
+          <input type="text" id="book-author" placeholder="Nhập tên tác giả"/>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeBookModal()">Hủy</button>
+        <button class="btn-primary" onclick="saveBook()">Lưu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+<script src="{{ url_for('static', filename='js/admin-app.js') }}" defer></script>
+</body>
+</html>
