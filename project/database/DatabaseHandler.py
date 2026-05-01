@@ -1,15 +1,28 @@
 import sqlite3
+from contextlib import contextmanager
+from typing import Optional, List, Dict, Any, Tuple
 
 class DatabaseHandler:
-    def __init__(self, strFilePath):
+    def __init__(self, strFilePath: str):
         self.strFilePath = strFilePath
         self.conn = sqlite3.connect(self.strFilePath, check_same_thread=False)
         if self.conn is not None:
+            self.conn.execute("PRAGMA foreign_keys = ON")
             print("Connected to database successfully!")
-
-    def _get_cursor(self):
-        """Tạo cursor mới cho mỗi operation"""
-        return self.conn.cursor()
+    
+    @contextmanager
+    def get_cursor(self):
+        """Context manager for database cursor"""
+        cursor = self.conn.cursor()
+        try:
+            yield cursor
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Database error: {e}")
+            raise
+        finally:
+            cursor.close()
 
     def __del__(self):
         print("Closing database connection...")
@@ -18,319 +31,237 @@ class DatabaseHandler:
         except:
             pass
 
-    def commit(self):
-        self.conn.commit()
-
-    def close(self):
-        self.conn.close()
-
-    def insertUser(self, strUserName, strEmail, strPassword):
-        # Kiểm tra nếu email đã tồn tại
-        cursor = self._get_cursor()
-        try:
-            cursor.execute("SELECT * FROM User WHERE Email = ?", (strEmail,))
-            blUserFind = cursor.fetchone()
-            # Nếu email chưa tồn tại, thực hiện chèn dữ liệu vào bảng User
-            if not blUserFind:
-                cursor.execute("INSERT INTO User (UserName, Email, Password) VALUES (?, ?, ?)", (strUserName, strEmail, strPassword))
-                self.commit()
-                return True
-            # Nếu email đã tồn tại, trả về False để thông báo lỗi
-            else:
-                return False
-        finally:
-            cursor.close()
+    # ===== USER OPERATIONS =====
     
-    def verifyUser(self, strEmail, strPassword):
-        # Kiểm tra nếu email và password khớp với một bản ghi trong bảng User
-        cursor = self._get_cursor()
-        try:
-            cursor.execute("SELECT * FROM User WHERE Email = ? AND Password = ?", (strEmail, strPassword))
-            blUserFind = cursor.fetchone()
-            print(f"verifyUser: email={strEmail}, password={strPassword}, found={blUserFind is not None}")
-            # Nếu tìm thấy bản ghi, trả về True để xác nhận đăng nhập thành công
-            if blUserFind:
-                return True
-            # Nếu không tìm thấy bản ghi, trả về False để thông báo lỗi
-            else:
+    def insertUser(self, strUserName: str, strEmail: str, strPassword: str) -> bool:
+        """Insert new user into database"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM User WHERE Email = ?", (strEmail,))
+            if cursor.fetchone():
                 return False
-        finally:
-            cursor.close()
+            
+            cursor.execute(
+                "INSERT INTO User (UserName, Email, Password) VALUES (?, ?, ?)",
+                (strUserName, strEmail, strPassword)
+            )
+            return True
+    
+    def verifyUser(self, strEmail: str, strPassword: str) -> bool:
+        """Verify user credentials"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM User WHERE Email = ? AND Password = ?",
+                (strEmail, strPassword)
+            )
+            return cursor.fetchone() is not None
         
-    def getUserName(self, strEmail):
-        # Lấy tên người dùng dựa trên email
-        cursor = self._get_cursor()
-        try:
+    def getUserName(self, strEmail: str) -> Optional[str]:
+        """Get username by email"""
+        with self.get_cursor() as cursor:
             cursor.execute("SELECT UserName FROM User WHERE Email = ?", (strEmail,))
-            objResult = cursor.fetchone()
-            if objResult is not None:
-                return objResult[0]
-            return None
-        finally:
-            cursor.close()
+            result = cursor.fetchone()
+            return result[0] if result else None
 
-    def insertBook(self, strBookName, strAuthor):
-        # Kiểm tra nếu book đã tồn tại
-        cursor = self._get_cursor()
-        try:
-            cursor.execute("SELECT * FROM Book WHERE BookName = ?", (strBookName,))
-            blBookFind = cursor.fetchone()
-            # Nếu book chưa tồn tại, thực hiện chèn dữ liệu vào bảng Book
-            if not blBookFind:
-                cursor.execute("INSERT INTO Book (BookName, Author, Status) VALUES (?, ?, ?)", (strBookName, strAuthor, True))
-                self.commit()
-                return True
-            # Nếu book đã tồn tại, trả về False để thông báo lỗi
-            else:
-                return False
-        finally:
-            cursor.close()
-        
-    def updateBook(self, unBookID, strNewBookName, strNewAuthor):
-        # Kiểm tra nếu book đã tồn tại
-        cursor = self._get_cursor()
-        try:
-            cursor.execute("SELECT * FROM Book WHERE BookID = ?", (unBookID,))
-            blBookFind = cursor.fetchone()
-            # Nếu book tồn tại, thực hiện cập nhật dữ liệu trong bảng Book
-            if blBookFind:
-                cursor.execute("UPDATE Book SET BookName = ?, Author = ? WHERE BookID = ?", (strNewBookName, strNewAuthor, unBookID))
-                self.commit()
-                return True
-            # Nếu book không tồn tại, trả về False để thông báo lỗi
-            else:
-                return False
-        finally:
-            cursor.close()
-
-    def insertSeat(self, unSeatNumber):
-        # Kiểm tra nếu seat đã tồn tại
-        cursor = self._get_cursor()
-        try:
-            cursor.execute("SELECT * FROM Seat WHERE SeatID = ?", (unSeatNumber,))
-            blSeatFind = cursor.fetchone()
-            # Nếu seat chưa tồn tại, thực hiện chèn dữ liệu vào bảng Seat
-            if not blSeatFind:
-                cursor.execute("INSERT INTO Seat (SeatID, Status) VALUES (?, ?)", (unSeatNumber, True))
-                self.commit()
-                return True
-            # Nếu saetr đã tồn tại, trả về False để thông báo lỗi
-            else:
-                return False
-        finally:
-            cursor.close()
-
-    def creatBookBorrow(self, strEmail, unBookID, tmStartTime, tmEndTime):
-        # Kiểm tra nếu user đã tồn tại
-        self.cursor.execute("SELECT * FROM User WHERE Email = ?", (strEmail,))
-        blUserFind = self.cursor.fetchone()
-        # Kiểm tra nếu book đã tồn tại
-        self.cursor.execute("SELECT * FROM Book WHERE BookID = ?", (unBookID,))
-        blBookFind = self.cursor.fetchone()
-        # Nếu user và book đều tồn tại, thực hiện chèn dữ liệu vào bảng BookManager
-        if blUserFind and blBookFind:
-            self.cursor.execute("INSERT INTO BookManager (Email, BookID, StartTime, EndTime) VALUES (?, ?, ?, ?)", (strEmail, unBookID, tmStartTime, tmEndTime))
-            self.commit()
-            return True
-        # Nếu user hoặc book không tồn tại, trả về False để thông báo lỗi
-        else:
-            return False
-
-    def creatSeatBooking(self, unUserID, unSeatID, tmStartTime, tmEndTime):
-          # Kiểm tra nếu user đã tồn tại
-        self.cursor.execute("SELECT * FROM User WHERE UserID = ?", (unUserID,))
-        blUserFind = self.cursor.fetchone()
-        # Kiểm tra nếu seat đã tồn tại
-        self.cursor.execute("SELECT * FROM Seat WHERE SeatID = ?", (unSeatID,))
-        blSeatFind = self.cursor.fetchone()
-        # Nếu user và seat đều tồn tại, thực hiện chèn dữ liệu vào bảng BookManager
-        if blUserFind and blSeatFind:
-            self.cursor.execute("INSERT INTO SeatManager (UserID, SeatID, StartTime, EndTime) VALUES (?, ?, ?, ?)", (unUserID, unSeatID, tmStartTime, tmEndTime))
-            self.commit()
-            return True
-        # Nếu user hoặc seat không tồn tại, trả về False để thông báo lỗi
-        else:
-            return False
-
-    def updateBookStatus(self, unBookID, blStatus):
-        # cap nhat trang thai cua book
-        cursor = self._get_cursor()
-        try:
+    def updateUserInfo(self, strEmail: str, strNewUserName: str, strNewPassword: str) -> bool:
+        """Update user information"""
+        with self.get_cursor() as cursor:
             cursor.execute(
-            "UPDATE Book SET Status = ? WHERE BookID = ?",
-            (blStatus, unBookID))
-            self.commit()
-            return True
-        finally:
-            cursor.close()
+                "UPDATE User SET UserName = ?, Password = ? WHERE Email = ?",
+                (strNewUserName, strNewPassword, strEmail)
+            )
+            return cursor.rowcount > 0
 
-    def updateUserInfo(self, strEmail, strNewUserName, strNewPassword):
-        # cap nhat thong tin cua user
-        cursor = self._get_cursor()
-        try:
-            cursor.execute(
-            "UPDATE User SET UserName = ?, Password = ? WHERE Email = ?",
-            (strNewUserName, strNewPassword, strEmail))
-            self.commit()
-            return True
-        finally:
-            cursor.close()
+    def deleteUser(self, userID: int) -> bool:
+        """Delete user by ID"""
+        with self.get_cursor() as cursor:
+            cursor.execute("DELETE FROM User WHERE UserID = ?", (userID,))
+            return cursor.rowcount > 0
 
-    def updateSeatStatus(self, unSeatID, blStatus):
-        # cap nhat trang thai cua seat
-        cursor = self._get_cursor()
-        try:
-            cursor.execute(
-            "UPDATE Seat SET Status = ? WHERE SeatID = ?",
-            (blStatus, unSeatID))
-            self.commit()
-            return True
-        finally:
-            cursor.close()
+    def getAllUsers(self) -> List[Dict[str, Any]]:
+        """Get all users"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT UserID, UserName, Email, CreateDate FROM User")
+            return [
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "email": row[2],
+                    "created": row[3]
+                }
+                for row in cursor.fetchall()
+            ]
 
-    def updateSeatBooking(self, unSeatID, tmEndTime):
-        # cap nhat thoi gian ket thuc cua seat booking
-        cursor = self._get_cursor()
-        try:
-            cursor.execute(
-            "UPDATE SeatManager SET Endtime = ? WHERE SeatID = ?",
-            (tmEndTime, unSeatID))
-            self.commit()
-            return True
-        finally:
-            cursor.close()
-
-    def updateBookBorrow(self, unBookID, tmEndTime):
-        # cap nhat thoi gian ket thuc cua book borrow
-        cursor = self._get_cursor()
-        try:
-            cursor.execute(
-            "UPDATE BookManager SET Endtime = ? WHERE BookID = ?",
-            (tmEndTime, unBookID))
-            self.commit()
-            return True
-        finally:
-            cursor.close()
-
-    def deleteUser(self, userID):
-        # xoa ban ghi user
-        cursor = self._get_cursor()
-        try:
-            cursor.execute(
-            "DELETE FROM User WHERE UserID = ?",
-            (userID, ))
-            self.commit()
-            return True
-        finally:
-            cursor.close()
-
-    def deleteBook(self, bookID):
-        # xoa ban ghi book
-        cursor = self._get_cursor()
-        try:
-            cursor.execute(
-            "DELETE FROM Book WHERE BookID = ?",
-            (bookID, ))
-            self.commit()
-            return True
-        finally:
-            cursor.close()
-
-    def deleteSeat(self, seatID):
-        pass
-
-    def deleteBookBorrow(self, unBorrowID):
-        cursor = self._get_cursor()
-        try:
-            cursor.execute(
-            "SELECT BookID FROM BookManager WHERE BookBorrowID = ?",
-            (unBorrowID,))
-            objResult = cursor.fetchone()
-            if objResult is None:
-                return False
-            unBookID = objResult[0]
-            # xoa ban ghi book borrow
-            cursor.execute(
-            "DELETE FROM BookManager WHERE BookBorrowID = ?",
-            (unBorrowID, ))
-            self.commit()
-            return self.updateBookStatus(unBookID, True)
-        finally:
-            cursor.close()
-
-    def deleteSeatBooking(self, unSeatBookingID):
-        cursor = self._get_cursor()
-        try:
-            cursor.execute(
-            "SELECT SeatID FROM SeatManager WHERE SeatBookingID = ?",
-            (unSeatBookingID,))
-            objResult = cursor.fetchone()
-            if objResult is None:
-                return False
-            unSeatID = objResult[0]
-            # xoa ban ghi seat booking
-            cursor.execute(
-            "DELETE FROM SeatManager WHERE SeatBookingID = ?",
-            (unSeatBookingID, ))
-            self.commit()
-            return self.updateSeatStatus(unSeatID, True)
-        finally:
-            cursor.close()
+    # ===== BOOK OPERATIONS =====
     
-    def getAllBooks(self):
-        cursor = self._get_cursor()
-        try:
+    def insertBook(self, unBookID: int, strBookName: str, strAuthor: str) -> bool:
+        """Insert new book"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM Book WHERE BookID = ?", (unBookID,))
+            if cursor.fetchone():
+                return False
+            
+            cursor.execute(
+                "INSERT INTO Book (BookID, BookName, Author, Status) VALUES (?, ?, ?, 1)",
+                (unBookID, strBookName, strAuthor)
+            )
+            return True
+        
+    def updateBook(self, unBookID: int, strNewBookName: str, strNewAuthor: str) -> bool:
+        """Update book information"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE Book SET BookName = ?, Author = ? WHERE BookID = ?",
+                (strNewBookName, strNewAuthor, unBookID)
+            )
+            return cursor.rowcount > 0
+
+    def deleteBook(self, bookID: int) -> bool:
+        """Delete book by ID"""
+        with self.get_cursor() as cursor:
+            cursor.execute("DELETE FROM Book WHERE BookID = ?", (bookID,))
+            return cursor.rowcount > 0
+
+    def updateBookStatus(self, unBookID: int, blStatus: bool) -> bool:
+        """Update book availability status"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE Book SET Status = ? WHERE BookID = ?",
+                (int(blStatus), unBookID)
+            )
+            return cursor.rowcount > 0
+
+    def getAllBooks(self) -> List[Dict[str, Any]]:
+        """Get all books"""
+        with self.get_cursor() as cursor:
             cursor.execute("SELECT BookID, BookName, Author, Status, BorrowedCount FROM Book")
-            objResult = cursor.fetchall()
-            listBooks = []
-            for row in objResult:
-                book = {
+            return [
+                {
                     "id": row[0],
                     "title": row[1],
                     "author": row[2],
                     "status": bool(row[3]),
                     "borrowedCount": row[4]
                 }
-                listBooks.append(book)
-            return listBooks
-        finally:
-            cursor.close()
+                for row in cursor.fetchall()
+            ]
+
+    # ===== SEAT OPERATIONS =====
     
-    def getAllUsers(self):
-        cursor = self._get_cursor()
-        try:
-            cursor.execute("SELECT UserID, UserName, Email, CreateDate FROM User")
-            objResult = cursor.fetchall()
-            listUsers = []
-            for row in objResult:
-                user = {
-                    "id": row[0],
-                    "name": row[1],
-                    "email": row[2],
-                    "created": row[3]
-                }
-                listUsers.append(user)
-            return listUsers
-        finally:
-            cursor.close()
-    
-    def getSeatBooking(self, unSeatID):
-        # lay thong tin booking hien tai cua mot ghe (UserID, thoi gian booking)
-        cursor = self._get_cursor()
-        try:
+    def insertSeat(self, unSeatID: int) -> bool:
+        """Insert new seat"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM Seat WHERE SeatID = ?", (unSeatID,))
+            if cursor.fetchone():
+                return False
+            
+            cursor.execute("INSERT INTO Seat (SeatID, Status) VALUES (?, 1)", (unSeatID,))
+            return True
+
+    def updateSeatStatus(self, unSeatID: int, blStatus: bool) -> bool:
+        """Update seat status"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE Seat SET Status = ? WHERE SeatID = ?",
+                (int(blStatus), unSeatID)
+            )
+            return cursor.rowcount > 0
+
+    def getSeatBooking(self, unUserID: int) -> Optional[Tuple]:
+        """Get current seat booking for a user"""
+        with self.get_cursor() as cursor:
             cursor.execute("""
-                SELECT sm.UserID, sm.StartTime, sm.EndTime 
+                SELECT sm.SeatID, sm.StartTime, sm.EndTime 
                 FROM SeatManager sm
-                WHERE sm.SeatID = ? AND sm.EndTime IS NULL
-            """, (unSeatID,))
+                WHERE sm.UserID = ? AND sm.EndTime IS NULL
+            """, (unUserID,))
             return cursor.fetchone()
-        finally:
-            cursor.close()
+
+    def deleteAllSeat(self) -> bool:
+        """Delete all seats from database"""
+        with self.get_cursor() as cursor:
+            cursor.execute("DELETE FROM Seat")
+            return cursor.rowcount > 0
+
+    # ===== BOOKING & BORROW OPERATIONS =====
     
-    def getUserBorrowedBooks(self, unUserID):
-        # lay danh sach cac book dang duoc muon boi mot user
-        cursor = self._get_cursor()
-        try:
+    def createBookBorrow(self, unUserID: int, unBookID: int, tmStartTime: str, tmEndTime: Optional[str] = None) -> bool:
+        """Create book borrow record"""
+        with self.get_cursor() as cursor:
+            # Verify user and book exist
+            cursor.execute("SELECT 1 FROM User WHERE UserID = ?", (unUserID,))
+            if not cursor.fetchone():
+                return False
+            
+            cursor.execute("SELECT Status FROM Book WHERE BookID = ?", (unBookID,))
+            book = cursor.fetchone()
+            if not book or not book[0]:
+                return False
+            
+            # Create borrow record
+            cursor.execute(
+                "INSERT INTO BookManager (UserID, BookID, StartTime, EndTime) VALUES (?, ?, ?, ?)",
+                (unUserID, unBookID, tmStartTime, tmEndTime)
+            )
+            
+            # Update book status and count
+            cursor.execute(
+                "UPDATE Book SET Status = 0, BorrowedCount = BorrowedCount + 1 WHERE BookID = ?",
+                (unBookID,)
+            )
+            return True
+
+    def createSeatBooking(self, unUserID: int, unSeatID: int, tmStartTime: str, tmEndTime: Optional[str] = None) -> bool:
+        """Create seat booking record"""
+        with self.get_cursor() as cursor:
+            # Verify user and seat exist
+            cursor.execute("SELECT 1 FROM User WHERE UserID = ?", (unUserID,))
+            if not cursor.fetchone():
+                return False
+            
+            cursor.execute("SELECT Status FROM Seat WHERE SeatID = ?", (unSeatID,))
+            seat = cursor.fetchone()
+            if not seat or not seat[0]:
+                return False
+            
+            # Create booking record
+            cursor.execute(
+                "INSERT INTO SeatManager (UserID, SeatID, StartTime, EndTime) VALUES (?, ?, ?, ?)",
+                (unUserID, unSeatID, tmStartTime, tmEndTime)
+            )
+            
+            # Update seat status
+            cursor.execute("UPDATE Seat SET Status = 0 WHERE SeatID = ?", (unSeatID,))
+            return True
+
+    def deleteBookBorrow(self, unBorrowID: int) -> bool:
+        """Delete book borrow record and restore book status"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT BookID FROM BookManager WHERE BookBorrowID = ?", (unBorrowID,))
+            result = cursor.fetchone()
+            if not result:
+                return False
+            
+            unBookID = result[0]
+            cursor.execute("DELETE FROM BookManager WHERE BookBorrowID = ?", (unBorrowID,))
+            cursor.execute("UPDATE Book SET Status = 1 WHERE BookID = ?", (unBookID,))
+            return True
+
+    def deleteSeatBooking(self, unSeatBookingID: int) -> bool:
+        """Delete seat booking and restore seat status"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT SeatID FROM SeatManager WHERE SeatBookingID = ?", (unSeatBookingID,))
+            result = cursor.fetchone()
+            if not result:
+                return False
+            
+            unSeatID = result[0]
+            cursor.execute("DELETE FROM SeatManager WHERE SeatBookingID = ?", (unSeatBookingID,))
+            cursor.execute("UPDATE Seat SET Status = 1 WHERE SeatID = ?", (unSeatID,))
+            return True
+
+    def getUserBorrowedBooks(self, unUserID: int) -> List[Tuple]:
+        """Get all books currently borrowed by a user"""
+        with self.get_cursor() as cursor:
             cursor.execute("""
                 SELECT b.BookID, b.BookName, bm.StartTime, bm.EndTime 
                 FROM BookManager bm
@@ -338,5 +269,3 @@ class DatabaseHandler:
                 WHERE bm.UserID = ? AND bm.EndTime IS NULL
             """, (unUserID,))
             return cursor.fetchall()
-        finally:
-            cursor.close()

@@ -62,12 +62,15 @@
         <p>Chọn vị trí yêu thích và đặt chỗ trước khi đến thư viện</p>
       </div>
       <div class="floor-map">
-        <div class="floor-label">Tầng 2 — Khu đọc sách yên tĩnh</div>
+        <div class="floor-label">Khu đọc sách yên tĩnh</div>
         <div class="seats-grid" id="seats-grid"></div>
         <div class="seat-legend">
-          <div style="display:flex;align-items:center;gap:6px"><div class="legend-dot avail"></div><span>Còn trống</span></div>
-          <div style="display:flex;align-items:center;gap:6px"><div class="legend-dot taken"></div><span>Đã đặt</span></div>
-          <div style="display:flex;align-items:center;gap:6px"><div class="legend-dot sel"></div><span>Đang chọn</span></div>
+          <canvas id="layout-canvas" width="1034" height="500"></canvas>
+          <div class="legend-row"> 
+            <div style="display:flex;align-items:center;gap:6px"><div class="legend-dot avail"></div><span>Còn trống</span></div>
+            <div style="display:flex;align-items:center;gap:6px"><div class="legend-dot taken"></div><span>Đã đặt</span></div>
+            <div style="display:flex;align-items:center;gap:6px"><div class="legend-dot sel"></div><span>Đang chọn</span></div>
+          </div>
         </div>
       </div>
       <div class="booking-panel">

@@ -1,19 +1,30 @@
 const TAKEN=[3,7,11,15,19,23,28,33,37,41,45,49,52,55,60];
 let selectedSeat=null;
-let userName='Nguyễn Văn A';
+let userName;
 
-const myBookings=[{seat:'A-04',date:'17/04/2026',time:'10:00 – 12:00'},{seat:'B-07',date:'18/04/2026',time:'13:00 – 15:00'}];
-const myBorrows=[{title:'Đắc Nhân Tâm',author:'Dale Carnegie',due:'25/04/2026'},{title:'Nhà Giả Kim',author:'Paulo Coelho',due:'22/04/2026'}];
-const books=[
-  {title:'Đắc Nhân Tâm',author:'Dale Carnegie',emoji:'📗',avail:false},
-  {title:'Nhà Giả Kim',author:'Paulo Coelho',emoji:'📙',avail:false},
-  {title:'Sapiens',author:'Yuval Noah Harari',emoji:'📘',avail:true},
-  {title:'Tư Duy Nhanh & Chậm',author:'Daniel Kahneman',emoji:'📒',avail:true},
-  {title:'Dám Nghĩ Lớn',author:'David J. Schwartz',emoji:'📕',avail:true},
-  {title:'Lược Sử Loài Người',author:'Yuval Noah Harari',emoji:'📗',avail:true},
-  {title:'Chiến Tranh & Hòa Bình',author:'Leo Tolstoy',emoji:'📙',avail:false},
-  {title:'Bắt Trẻ Đồng Xanh',author:'J.D. Salinger',emoji:'📘',avail:true},
-];
+const myBookings=[];
+const myBorrows=[];
+const books=[];
+
+const canvas = document.getElementById("layout-canvas");
+const ctx = canvas.getContext("2d");
+
+function renderLayout(data) {
+  console.log('Rendering layout with data:', data);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  data.objects.forEach(obj => {
+    console.log('Rendering object:', obj);
+    if (obj.shape === "rect") {
+      // vẽ bàn
+      ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+
+      // vẽ tên
+      ctx.font = "12px Arial";
+      ctx.fillText(obj.name, obj.x + 5, obj.y + 15);
+    }
+  });
+}
 
 function switchTab(t){
   console.log('Switching to tab:',t);
@@ -47,6 +58,9 @@ function doSignup(){
 function enterApp(){
   document.getElementById('screen-login').classList.remove('active');
   document.getElementById('screen-main').classList.add('active');
+  data = {"objects":[{"id":1777612496001,"shape":"roundrect","type":"table","x":250,"y":90,"width":180,"height":220,"name":"Bàn-1"},{"id":1777612503688,"shape":"rect","type":"seat","x":190,"y":100,"width":40,"height":40,"name":"Ghế-1"},{"id":1777612506520,"shape":"rect","type":"seat","x":190,"y":170,"width":40,"height":40,"name":"Ghế-2"},{"id":1777612510183,"shape":"rect","type":"seat","x":190,"y":240,"width":40,"height":40,"name":"Ghế-3"},{"id":1777612515076,"shape":"rect","type":"seat","x":450,"y":100,"width":40,"height":40,"name":"Ghế-4"},{"id":1777612518157,"shape":"rect","type":"seat","x":450,"y":170,"width":40,"height":40,"name":"Ghế-5"},{"id":1777612529053,"shape":"rect","type":"seat","x":450,"y":240,"width":40,"height":40,"name":"Ghế-6"}],"snapGrid":10,"canvasSize":{"width":800,"height":500}}
+  renderLayout(data);
+  console.log('Layout rendered');
   buildSeats();buildBooks();
   const today=new Date().toISOString().split('T')[0];
   document.getElementById('book-date').value=today;

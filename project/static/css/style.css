@@ -103,7 +103,7 @@
   .seat:hover{border-color:var(--accent);background:rgba(45,90,61,.08);color:var(--accent)}
   .seat.taken{background:#F1EDE3;border-color:transparent;cursor:not-allowed;color:#BDB8AE}
   .seat.selected{background:var(--accent);border-color:var(--accent);color:#fff}
-  .seat-legend{display:flex;gap:1.5rem;font-size:12px;color:var(--muted);align-items:center}
+  .seat-legend{display:flex;gap:1.5rem;font-size:12px;color:var(--muted);flex-direction: column;align-items:center}
   .legend-dot{width:14px;height:14px;border-radius:4px;flex-shrink:0}
   .legend-dot.avail{background:var(--bg);border:1.5px solid var(--border)}
   .legend-dot.taken{background:#F1EDE3}
@@ -116,6 +116,7 @@
   .selected-info{font-size:14px;color:var(--accent);font-weight:500;margin-bottom:1rem;min-height:22px}
   .btn-book{padding:12px 32px;background:var(--accent);color:#fff;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:opacity .2s}
   .btn-book:hover{opacity:.88}
+  .legend-row {display: flex;gap: 20px;}
 
   /* Borrow books */
   .search-bar{display:flex;gap:10px;margin-bottom:1.5rem}
