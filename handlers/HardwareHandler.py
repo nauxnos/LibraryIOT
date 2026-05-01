@@ -1,8 +1,8 @@
-from handlers.Hardware.RC522Sensor import RC522Sensor
-from handlers.Hardware.SR04Sensor import SR04Sensor
+from Hardware.RC522Sensor import RC522Sensor
+from Hardware.SR04Sensor import SR04Sensor
 import json
 
-with open("../database/gpio_config.json") as f:
+with open("gpio_config.json") as f:
     config = json.load(f)
 
 SENSORS = [

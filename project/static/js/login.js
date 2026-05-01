@@ -57,3 +57,8 @@ function showToast(msg){
   const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),3000);
 }
+
+document.getElementById("loginform").addEventListener("submit", function(e){
+  e.preventDefault();   // 🔥 chặn reload + tránh gọi 2 lần
+  doLogin();            // 👉 chỉ gọi 1 lần
+});

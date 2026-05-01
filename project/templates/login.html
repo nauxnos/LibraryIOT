@@ -23,10 +23,10 @@
       <button class="tab-btn" onclick="switchTab('signup')">Đăng ký</button>
     </div>
     <div id="form-login" class="form-panel active">
-      <form onsubmit="doLogin()">
+      <form id="loginform">
         <div class="form-group"><label>Email</label><input type="email" placeholder="ten@email.com" id="l-email"/></div>
         <div class="form-group"><label>Mật khẩu</label><input type="password" placeholder="••••••••" id="l-pass"/></div>
-        <button class="btn-primary" onclick="doLogin()">Đăng nhập</button>
+        <button type="submit" class="btn-primary">Đăng nhập</button>
       </form>
     </div>
     <div id="form-signup" class="form-panel">
