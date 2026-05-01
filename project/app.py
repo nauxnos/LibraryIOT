@@ -306,6 +306,17 @@ def save_layout():
         print(f"Save layout error: {e}")
         return jsonify({"success": False, "error": "ServerError"}), 500
 
+@app.route("/get-layout")    
+@login_required
+def get_layout():
+    try:
+        with open("layout.json", "r", encoding="utf-8") as f:
+            layout_data = json.load(f)
+        return jsonify(layout_data)
+    except Exception as e:
+        print(f"Get layout error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
 # ===== ERROR HANDLERS =====
 
 @app.errorhandler(404)
