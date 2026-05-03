@@ -317,6 +317,212 @@ def get_layout():
         print(f"Get layout error: {e}")
         return jsonify({"success": False, "error": "ServerError"}), 500
 
+@app.route("/get-schedule")
+@login_required
+def get_schedule():
+    """Trả về toàn bộ lịch đặt ghế, kèm thông tin người thuê (admin only)"""
+    try:
+        if not session["user"].get("isAdmin", False):
+            return jsonify({"error": "Unauthorized"}), 403
+        schedule = dbHandler.getAllSeatBookings()
+        return jsonify(schedule)
+    except Exception as e:
+        print(f"Get schedule error: {e}")
+        return jsonify({"error": "ServerError"}), 500
+ 
+@app.route("/get-seat-schedule")
+@login_required
+def get_seat_schedule():
+    """Trả về lịch của 1 ghế cụ thể — không lộ thông tin người thuê (user)"""
+    try:
+        seat_id = request.args.get("seat_id", type=int)
+        if not seat_id:
+            return jsonify({"error": "MissingSeatID"}), 400
+        schedule = dbHandler.getSeatSchedule(seat_id)
+        # Chỉ trả về start/end time, không trả name/email
+        public = [{"start": s["start"], "end": s["end"]} for s in schedule]
+        return jsonify(public)
+    except Exception as e:
+        print(f"Get seat schedule error: {e}")
+        return jsonify({"error": "ServerError"}), 500
+ 
+@app.route("/cancel-booking", methods=["POST"])
+@login_required
+def cancel_booking():
+    """Admin hủy một booking"""
+    try:
+        if not session["user"].get("isAdmin", False):
+            return jsonify({"success": False, "error": "Unauthorized"}), 403
+        data = request.get_json()
+        booking_id = data.get("id")
+        if not booking_id:
+            return jsonify({"success": False, "error": "MissingID"})
+        if dbHandler.deleteSeatBooking(booking_id):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "NotFound"})
+    except Exception as e:
+        print(f"Cancel booking error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+ 
+@app.route("/book-seat", methods=["POST"])
+@login_required
+def book_seat():
+    """User đặt ghế theo giờ"""
+    try:
+        data     = request.get_json()
+        seat_id  = data.get("seatId")
+        date_str = data.get("date")      # "YYYY-MM-DD"
+        hours    = data.get("hours", []) # [8, 9, 10] — danh sách giờ chọn
+ 
+        if not seat_id or not date_str or not hours:
+            return jsonify({"success": False, "error": "MissingFields"})
+ 
+        # Lấy user_id từ session
+        user_email = session["user"]["email"]
+        user_id    = dbHandler.getUserIdByEmail(user_email)
+        if not user_id:
+            return jsonify({"success": False, "error": "UserNotFound"})
+ 
+        # Sắp xếp giờ, tính start/end
+        hours_sorted = sorted(hours)
+        start_time = f"{date_str}T{str(hours_sorted[0]).zfill(2)}:00:00"
+        end_time   = f"{date_str}T{str(hours_sorted[-1]+1).zfill(2)}:00:00"
+ 
+        # Kiểm tra trùng lịch
+        if dbHandler.hasSeatConflict(seat_id, start_time, end_time):
+            return jsonify({"success": False, "error": "TimeConflict"})
+ 
+        if dbHandler.createSeatBooking(user_id, seat_id, start_time, end_time):
+            return jsonify({"success": True, "start": start_time, "end": end_time})
+ 
+        return jsonify({"success": False, "error": "BookingFailed"})
+ 
+    except Exception as e:
+        print(f"Book seat error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+ 
+ 
+@app.route("/my-bookings")
+@login_required
+def my_bookings():
+    """Lấy danh sách đặt chỗ của user hiện tại"""
+    try:
+        user_email = session["user"]["email"]
+        user_id    = dbHandler.getUserIdByEmail(user_email)
+        if not user_id:
+            return jsonify([])
+ 
+        bookings = dbHandler.getUserBookings(user_id)
+        return jsonify(bookings)
+    except Exception as e:
+        print(f"My bookings error: {e}")
+        return jsonify({"error": "ServerError"}), 500
+ 
+ 
+@app.route("/cancel-my-booking", methods=["POST"])
+@login_required
+def cancel_my_booking():
+    """User tự hủy booking của mình"""
+    try:
+        data       = request.get_json()
+        booking_id = data.get("id")
+        if not booking_id:
+            return jsonify({"success": False, "error": "MissingID"})
+ 
+        user_email = session["user"]["email"]
+        user_id    = dbHandler.getUserIdByEmail(user_email)
+ 
+        # Xác nhận booking thuộc về user này
+        if not dbHandler.isBookingOwner(booking_id, user_id):
+            return jsonify({"success": False, "error": "Unauthorized"})
+ 
+        if dbHandler.deleteSeatBooking(booking_id):
+            return jsonify({"success": True})
+ 
+        return jsonify({"success": False, "error": "NotFound"})
+    except Exception as e:
+        print(f"Cancel my booking error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+ 
+ 
+# ── BOOK BORROWING ────────────────────────────────
+ 
+@app.route("/borrow-book", methods=["POST"])
+@login_required
+def borrow_book():
+    """User mượn sách"""
+    try:
+        data    = request.get_json()
+        book_id = data.get("bookId")
+        if not book_id:
+            return jsonify({"success": False, "error": "MissingFields"})
+ 
+        user_email = session["user"]["email"]
+        user_id    = dbHandler.getUserIdByEmail(user_email)
+        if not user_id:
+            return jsonify({"success": False, "error": "UserNotFound"})
+ 
+        # Kiểm tra user đang mượn < 3 quyển
+        active_borrows = dbHandler.countActiveBorrows(user_id)
+        if active_borrows >= 3:
+            return jsonify({"success": False, "error": "BorrowLimit"})
+ 
+        start_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        if dbHandler.createBookBorrow(user_id, book_id, start_time):
+            due_date = dbHandler.getBorrowDueDate(user_id, book_id)
+            return jsonify({"success": True, "due": due_date})
+ 
+        return jsonify({"success": False, "error": "BorrowFailed"})
+ 
+    except Exception as e:
+        print(f"Borrow book error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+ 
+ 
+@app.route("/return-book", methods=["POST"])
+@login_required
+def return_book():
+    """User trả sách"""
+    try:
+        data      = request.get_json()
+        borrow_id = data.get("borrowId")
+        if not borrow_id:
+            return jsonify({"success": False, "error": "MissingFields"})
+ 
+        user_email = session["user"]["email"]
+        user_id    = dbHandler.getUserIdByEmail(user_email)
+ 
+        # Xác nhận borrow thuộc về user này
+        if not dbHandler.isBorrowOwner(borrow_id, user_id):
+            return jsonify({"success": False, "error": "Unauthorized"})
+ 
+        end_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        if dbHandler.returnBook(borrow_id, end_time):
+            return jsonify({"success": True})
+ 
+        return jsonify({"success": False, "error": "ReturnFailed"})
+ 
+    except Exception as e:
+        print(f"Return book error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+ 
+ 
+@app.route("/my-borrows")
+@login_required
+def my_borrows():
+    """Lấy danh sách sách đang mượn của user"""
+    try:
+        user_email = session["user"]["email"]
+        user_id    = dbHandler.getUserIdByEmail(user_email)
+        if not user_id:
+            return jsonify([])
+ 
+        borrows = dbHandler.getUserBorrowsDetail(user_id)
+        return jsonify(borrows)
+    except Exception as e:
+        print(f"My borrows error: {e}")
+        return jsonify({"error": "ServerError"}), 500
+
 # ===== ERROR HANDLERS =====
 
 @app.errorhandler(404)

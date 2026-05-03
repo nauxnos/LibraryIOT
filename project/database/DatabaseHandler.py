@@ -269,3 +269,222 @@ class DatabaseHandler:
                 WHERE bm.UserID = ? AND bm.EndTime IS NULL
             """, (unUserID,))
             return cursor.fetchall()
+
+    # ===== THÊM VÀO DatabaseHandler.py (trong class DatabaseHandler) =====
+
+    def getAllSeatBookings(self) -> List[Dict[str, Any]]:
+        """Lấy toàn bộ lịch đặt ghế kèm thông tin người thuê — dành cho admin"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    sm.SeatBookingID,
+                    sm.SeatID,
+                    s2.SeatID as SeatDBID,
+                    sm.Email,
+                    u.UserName,
+                    u.Email,
+                    sm.StartTime,
+                    sm.EndTime
+                FROM SeatManager sm
+                JOIN User u ON sm.Email = u.Email
+                JOIN Seat s2 ON sm.SeatID = s2.SeatID
+                ORDER BY sm.StartTime DESC
+            """)
+            rows = cursor.fetchall()
+            # Đọc tên ghế từ layout.json nếu có
+            import json, os
+            seat_names = {}
+            try:
+                if os.path.exists("layout.json"):
+                    with open("layout.json", "r", encoding="utf-8") as f:
+                        layout = json.load(f)
+                    seat_names = {
+                        obj["id"]: obj["name"]
+                        for obj in layout.get("objects", [])
+                        if obj["type"] == "seat"
+                    }
+            except Exception:
+                pass
+
+            return [
+                {
+                    "bookingId": row[0],
+                    "seatId":    row[1],
+                    "seatName":  seat_names.get(row[1], f"Ghế #{row[1]}"),
+                    "userId":    row[3],
+                    "userName":  row[4],
+                    "email":     row[5],
+                    "start":     row[6],
+                    "end":       row[7] or "—"
+                }
+                for row in rows
+            ]
+
+    def getSeatSchedule(self, unSeatID: int) -> List[Dict[str, Any]]:
+        """Lấy lịch của 1 ghế — chỉ trả start/end, không lộ user"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT StartTime, EndTime
+                FROM SeatManager
+                WHERE SeatID = ?
+                ORDER BY StartTime DESC
+            """, (unSeatID,))
+            return [
+                {"start": row[0], "end": row[1] or None}
+                for row in cursor.fetchall()
+            ]
+
+
+    def getUserIdByEmail(self, email: str) -> Optional[int]:
+        """Lấy UserID từ email"""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT UserID FROM User WHERE Email = ?", (email,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+ 
+    # ── SEAT BOOKING ──────────────────────────────
+ 
+    def hasSeatConflict(self, seat_id: int, start_time: str, end_time: str) -> bool:
+        """Kiểm tra ghế có bị trùng lịch không"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT 1 FROM SeatManager
+                WHERE SeatID = ?
+                  AND (EndTime IS NULL OR EndTime > ?)
+                  AND StartTime < ?
+            """, (seat_id, start_time, end_time))
+            return cursor.fetchone() is not None
+ 
+    def getUserBookings(self, user_id: int) -> List[Dict[str, Any]]:
+        """Lấy tất cả booking của user, kèm tên ghế từ layout.json"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT sm.SeatBookingID, sm.SeatID, sm.StartTime, sm.EndTime
+                FROM SeatManager sm
+                WHERE sm.UserID = ?
+                ORDER BY sm.StartTime DESC
+            """, (user_id,))
+            rows = cursor.fetchall()
+ 
+        # Đọc tên ghế từ layout.json
+        import json, os
+        seat_names = {}
+        try:
+            if os.path.exists("layout.json"):
+                with open("layout.json", "r", encoding="utf-8") as f:
+                    layout = json.load(f)
+                seat_names = {
+                    obj["id"]: obj["name"]
+                    for obj in layout.get("objects", [])
+                    if obj["type"] == "seat"
+                }
+        except Exception:
+            pass
+ 
+        return [
+            {
+                "bookingId": row[0],
+                "seatId":    row[1],
+                "seatName":  seat_names.get(row[1], f"Ghế #{row[1]}"),
+                "start":     row[2],
+                "end":       row[3],
+                "active":    row[3] is None
+            }
+            for row in rows
+        ]
+ 
+    def isBookingOwner(self, booking_id: int, user_id: int) -> bool:
+        """Kiểm tra booking có thuộc về user không"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM SeatManager WHERE SeatBookingID = ? AND UserID = ?",
+                (booking_id, user_id)
+            )
+            return cursor.fetchone() is not None
+ 
+    # ── BOOK BORROWING ────────────────────────────
+ 
+    def countActiveBorrows(self, user_id: int) -> int:
+        """Đếm số sách đang mượn (chưa trả)"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT COUNT(*) FROM BookManager
+                WHERE UserID = ? AND EndTime IS NULL
+            """, (user_id,))
+            return cursor.fetchone()[0]
+ 
+    def getBorrowDueDate(self, user_id: int, book_id: int) -> str:
+        """Tính hạn trả = start + 14 ngày"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT StartTime FROM BookManager
+                WHERE UserID = ? AND BookID = ? AND EndTime IS NULL
+                ORDER BY BookBorrowID DESC LIMIT 1
+            """, (user_id, book_id))
+            row = cursor.fetchone()
+            if not row:
+                return ""
+            from datetime import datetime, timedelta
+            start = datetime.fromisoformat(row[0])
+            due   = start + timedelta(days=14)
+            return due.strftime("%d/%m/%Y")
+ 
+    def isBorrowOwner(self, borrow_id: int, user_id: int) -> bool:
+        """Kiểm tra borrow có thuộc về user không"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM BookManager WHERE BookBorrowID = ? AND UserID = ?",
+                (borrow_id, user_id)
+            )
+            return cursor.fetchone() is not None
+ 
+    def returnBook(self, borrow_id: int, end_time: str) -> bool:
+        """Trả sách: cập nhật EndTime và mở lại trạng thái sách"""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT BookID FROM BookManager WHERE BookBorrowID = ?",
+                (borrow_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+            book_id = row[0]
+            cursor.execute(
+                "UPDATE BookManager SET EndTime = ? WHERE BookBorrowID = ?",
+                (end_time, borrow_id)
+            )
+            cursor.execute(
+                "UPDATE Book SET Status = 1 WHERE BookID = ?",
+                (book_id,)
+            )
+            return cursor.rowcount > 0
+ 
+    def getUserBorrowsDetail(self, user_id: int) -> List[Dict[str, Any]]:
+        """Lấy danh sách sách đang mượn (chưa trả) của user"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT bm.BookBorrowID, b.BookID, b.BookName, b.Author, bm.StartTime
+                FROM BookManager bm
+                JOIN Book b ON bm.BookID = b.BookID
+                WHERE bm.UserID = ? AND bm.EndTime IS NULL
+                ORDER BY bm.StartTime DESC
+            """, (user_id,))
+            from datetime import datetime, timedelta
+            result = []
+            for row in cursor.fetchall():
+                try:
+                    start = datetime.fromisoformat(row[4])
+                    due   = (start + timedelta(days=14)).strftime("%d/%m/%Y")
+                    overdue = datetime.now() > start + timedelta(days=14)
+                except Exception:
+                    due = "—"
+                    overdue = False
+                result.append({
+                    "borrowId": row[0],
+                    "bookId":   row[1],
+                    "title":    row[2],
+                    "author":   row[3],
+                    "due":      due,
+                    "overdue":  overdue
+                })
+            return result
