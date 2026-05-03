@@ -207,3 +207,11 @@ marimo/_lsp/
 __marimo__/
 
 test/
+
+# Database files
+*.db
+library.db
+.library.db
+
+layout.json
+.layout.json
