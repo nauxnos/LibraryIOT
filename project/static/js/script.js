@@ -1,676 +1,992 @@
-// ===== STATE =====
+// ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
 const AppState = {
   selectedSeat: null,
-  myBookings: [],
-  myBorrows: [],
-  books: [],
-  layoutData: null,
-  bookedSeatIds: new Set() // Track booked seats from server
+  myBookings:   [],   // from server
+  myBorrows:    [],   // from server
+  books:        [],
+  layoutData:   null,
 };
 
-// ===== UTILS =====
+// ─────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────
 const Utils = {
-  showToast(msg) {
+  // Toast
+  showToast(msg, type = '') {
     const t = document.getElementById('toast');
     if (!t) return;
     t.textContent = msg;
-    t.classList.add('show');
-    setTimeout(() => t.classList.remove('show'), 3000);
+    t.className   = `toast show${type ? ' ' + type : ''}`;
+    clearTimeout(this._tid);
+    this._tid = setTimeout(() => (t.className = 'toast'), 3000);
   },
 
+  // Generic JSON fetch – throws on non-2xx
   async fetchJSON(url, options = {}) {
     const res = await fetch(url, {
       headers: { 'Content-Type': 'application/json' },
-      ...options
+      ...options,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
-  }
-};
-
-// ===== LAYOUT RENDERER (DIV-BASED) =====
-const LayoutRenderer = {
-  container: null,
-
-  init() {
-    this.container = document.getElementById('layout-container');
-    if (!this.container) return console.error('layout-container not found');
-    this.loadAndRender();
   },
 
-  async loadAndRender() {
+  // Convenience POST helper
+  post(url, body) {
+    return this.fetchJSON(url, { method: 'POST', body: JSON.stringify(body) });
+  },
+
+  // Format ISO → "HH:MM DD/MM/YYYY"
+  fmtDatetime(iso) {
+    if (!iso) return '—';
     try {
-      AppState.layoutData = await Utils.fetchJSON('/get-layout');
-      this.render();
-    } catch (e) {
-      console.error('Failed to load layout:', e);
-      this.container.innerHTML = '<p style="color:#999;text-align:center;padding:2rem">Layout không khả dụng</p>';
-    }
+      return new Date(iso).toLocaleString('vi-VN', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      });
+    } catch { return iso; }
   },
 
-  render() {
-    const data = AppState.layoutData;
-    if (!data?.objects) return;
-
-    const { width = 800, height = 500 } = data.canvasSize || {};
-    this.container.style.cssText = `position:relative;width:${width}px;height:${height}px;background:#fff;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden`;
-    this.container.innerHTML = '';
-
-    // Draw grid background via CSS
-    this.container.style.backgroundImage =
-      'linear-gradient(#f0f0f0 1px, transparent 1px), linear-gradient(90deg, #f0f0f0 1px, transparent 1px)';
-    this.container.style.backgroundSize = '40px 40px';
-
-    data.objects.forEach(obj => this._createEl(obj));
+  // Format duration in minutes → "X phút" / "Xh Yp" / "X giờ"
+  fmtDuration(mins) {
+    if (mins <= 0)  return 'sắp xong';
+    if (mins < 60)  return `${mins} phút`;
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return m ? `${h}h ${m}p` : `${h} giờ`;
   },
 
-  _createEl(obj) {
-    const el = document.createElement('div');
-    el.dataset.id = obj.id;
-    el.dataset.type = obj.type;
-    el.dataset.name = obj.name;
-
-    // Base styles
-    const isTable = obj.type === 'table';
-    const isCircle = obj.shape === 'circle';
-
-    const left = isCircle ? obj.x - obj.radius : obj.x;
-    const top  = isCircle ? obj.y - obj.radius : obj.y;
-    const w    = isCircle ? obj.radius * 2 : obj.width;
-    const h    = isCircle ? obj.radius * 2 : obj.height;
-
-    Object.assign(el.style, {
-      position: 'absolute',
-      left: left + 'px',
-      top: top + 'px',
-      width: w + 'px',
-      height: h + 'px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontSize: '11px',
-      fontFamily: '"DM Sans", sans-serif',
-      fontWeight: '500',
-      userSelect: 'none',
-      boxSizing: 'border-box',
-      transition: 'all 0.15s ease',
-      borderRadius: obj.shape === 'circle' ? '50%'
-                  : obj.shape === 'roundrect' ? '12px' : '4px',
-      background: isTable ? '#D4C9A8' : '#fff',
-      border: isTable ? '2px solid #A89E80' : '2px solid #6B9A7D',
-      color: isTable ? '#6B6860' : '#2D5A3D',
-      cursor: isTable ? 'default' : 'pointer',
-      zIndex: isTable ? 1 : 2,
-      textAlign: 'center',
-      lineHeight: '1.2',
-      padding: '2px'
-    });
-
-    el.textContent = obj.name;
-
-    if (obj.type === 'seat') {
-      this._makeSeatInteractive(el, obj);
-    }
-
-    this.container.appendChild(el);
-  },
-
-  _makeSeatInteractive(el, obj) {
-    el.addEventListener('mouseenter', () => {
-      if (el.dataset.state === 'taken') return;
-      if (el.dataset.state !== 'selected') {
-        el.style.background = 'rgba(45,90,61,0.12)';
-        el.style.borderColor = '#2D5A3D';
-        el.style.transform = 'scale(1.06)';
-      }
-    });
-
-    el.addEventListener('mouseleave', () => {
-      if (el.dataset.state === 'taken' || el.dataset.state === 'selected') return;
-      el.style.background = '#fff';
-      el.style.borderColor = '#6B9A7D';
-      el.style.transform = '';
-    });
-
-    el.addEventListener('click', () => {
-      // Always show schedule popup on click
-      SeatPopup.show(obj, el);
-    });
-  },
-
-  _selectSeat(el, obj) {
-    // Deselect previous
-    if (AppState.selectedSeat) {
-      const prev = this.container.querySelector(`[data-id="${AppState.selectedSeat.id}"]`);
-      if (prev) {
-        prev.dataset.state = '';
-        Object.assign(prev.style, {
-          background: '#fff',
-          borderColor: '#6B9A7D',
-          color: '#2D5A3D',
-          transform: ''
-        });
-      }
-    }
-
-    // Select new
-    AppState.selectedSeat = obj;
-    el.dataset.state = 'selected';
-    Object.assign(el.style, {
-      background: '#2D5A3D',
-      borderColor: '#2D5A3D',
-      color: '#fff',
-      transform: 'scale(1.08)',
-      boxShadow: '0 4px 12px rgba(45,90,61,0.3)'
-    });
-
-    document.getElementById('selected-info').textContent =
-      `Đã chọn: ${obj.name} — Khu đọc sách yên tĩnh`;
-    Utils.showToast(`Đã chọn ${obj.name}`);
-  },
-
-  markSeatTaken(seatId) {
-    const el = this.container?.querySelector(`[data-id="${seatId}"]`);
-    if (!el || el.dataset.type !== 'seat') return;
-    el.dataset.state = 'taken';
-    Object.assign(el.style, {
-      background: '#F1EDE3',
-      borderColor: 'transparent',
-      color: '#BDB8AE',
-      cursor: 'not-allowed'
-    });
-  }
-};
-
-
-// ===== SEAT SCHEDULE POPUP (Timeline modal) =====
-const SeatPopup = {
-  _state: null,   // { modal, overlay, obj, el, selectedDate, selectedSlots, allSlots }
-
-  // Hours shown on timeline: 7:00 → 22:00
-  HOUR_START: 7,
-  HOUR_END: 22,
-
-  async show(seatObj, seatEl) {
-    this._close();
-
-    // Default date = today
-    const todayStr = new Date().toISOString().split('T')[0];
-
-    // Fetch existing bookings for this seat
-    let allSlots = [];
-    try {
-      allSlots = await Utils.fetchJSON(`/get-seat-schedule?seat_id=${seatObj.id}`);
-    } catch (e) { console.error(e); }
-
-    // Create overlay + modal
+  // Create a bottom-sheet pair {overlay, modal} and attach backdrop-close
+  createSheet(overlayClass, modalClass, onClose) {
     const overlay = document.createElement('div');
-    overlay.className = 'stm-overlay';
-    overlay.addEventListener('click', e => { if (e.target === overlay) this._close(); });
+    overlay.className = overlayClass;
+    overlay.addEventListener('click', e => { if (e.target === overlay) onClose(); });
 
     const modal = document.createElement('div');
-    modal.className = 'stm-modal';
+    modal.className = modalClass;
 
-    document.body.appendChild(overlay);
-    document.body.appendChild(modal);
+    document.body.append(overlay, modal);
+    return { overlay, modal };
+  },
 
-    this._state = { modal, overlay, obj: seatObj, el: seatEl, selectedDate: todayStr, selectedSlots: new Set(), allSlots };
-
-    this._renderModal();
-
-    // Animate in
+  // Animate a sheet pair in
+  openSheet(overlay, modal) {
     requestAnimationFrame(() => {
       overlay.classList.add('open');
       modal.classList.add('open');
     });
   },
 
-  _renderModal() {
-    const { modal, obj, selectedDate, selectedSlots, allSlots } = this._state;
+  // Animate a sheet pair out and remove after transition
+  closeSheet(overlay, modal, delay = 300) {
+    overlay.classList.remove('open');
+    modal.classList.remove('open');
+    setTimeout(() => { overlay.remove(); modal.remove(); }, delay);
+  },
+};
 
-    const bookedHours = this._getBookedHours(allSlots, selectedDate);
-    const totalHours = this.HOUR_END - this.HOUR_START;
+// ─────────────────────────────────────────────
+// LAYOUT RENDERER
+// ─────────────────────────────────────────────
+const LayoutRenderer = {
+  container: null,
 
-    // Build timeline rows — one row = one seat (here just this seat)
-    const seatRow = this._buildTimelineRow(obj.name, bookedHours, selectedSlots);
+  // Seat visual states
+  STATES: {
+    default:  { bg: '#fff',      border: '#6B9A7D', color: '#2D5A3D', cursor: 'pointer',     shadow: '' },
+    hover:    { bg: 'rgba(45,90,61,.12)', border: '#2D5A3D', color: '#2D5A3D', cursor: 'pointer', shadow: '' },
+    selected: { bg: '#2D5A3D',   border: '#2D5A3D', color: '#fff',    cursor: 'pointer',     shadow: '0 4px 12px rgba(45,90,61,.3)' },
+    taken:    { bg: '#F1EDE3',   border: 'transparent', color: '#BDB8AE', cursor: 'not-allowed', shadow: '' },
+  },
 
-    // Selected range display
-    const sortedSlots = [...selectedSlots].sort((a,b) => a-b);
-    const selText = sortedSlots.length
-      ? `${String(sortedSlots[0]).padStart(2,'0')}:00 – ${String(sortedSlots[sortedSlots.length-1]+1).padStart(2,'0')}:00`
+  init() {
+    this.container = document.getElementById('layout-container');
+    if (!this.container) return;
+    this._load();
+  },
+
+  async _load() {
+    try {
+      AppState.layoutData = await Utils.fetchJSON('/get-layout');
+      this._render();
+    } catch {
+      this.container.innerHTML =
+        '<p style="color:#999;text-align:center;padding:2rem">Layout không khả dụng</p>';
+    }
+  },
+
+  _render() {
+    const { objects, canvasSize = {} } = AppState.layoutData || {};
+    if (!objects) return;
+    const { width = 800, height = 500 } = canvasSize;
+
+    Object.assign(this.container.style, {
+      position: 'relative', width: width + 'px', height: height + 'px',
+      background: '#fff', border: '1px solid #e0e0e0',
+      borderRadius: '8px', overflow: 'hidden',
+      backgroundImage: 'linear-gradient(#f0f0f0 1px,transparent 1px),linear-gradient(90deg,#f0f0f0 1px,transparent 1px)',
+      backgroundSize: '40px 40px',
+    });
+    this.container.innerHTML = '';
+    objects.forEach(obj => this.container.appendChild(this._createEl(obj)));
+  },
+
+  _createEl(obj) {
+    const el        = document.createElement('div');
+    el.dataset.id   = obj.id;
+    el.dataset.type = obj.type;
+    el.dataset.name = obj.name;
+
+    const isTable  = obj.type === 'table';
+    const isCircle = obj.shape === 'circle';
+    const left = isCircle ? obj.x - obj.radius : obj.x;
+    const top  = isCircle ? obj.y - obj.radius : obj.y;
+    const w    = isCircle ? obj.radius * 2 : obj.width;
+    const h    = isCircle ? obj.radius * 2 : obj.height;
+
+    Object.assign(el.style, {
+      position: 'absolute', left: left + 'px', top: top + 'px',
+      width: w + 'px', height: h + 'px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: '11px', fontFamily: '"DM Sans",sans-serif', fontWeight: '500',
+      userSelect: 'none', boxSizing: 'border-box', transition: 'all .15s ease',
+      borderRadius: isCircle ? '50%' : obj.shape === 'roundrect' ? '12px' : '4px',
+      background:   isTable ? '#D4C9A8' : '#fff',
+      border:       isTable ? '2px solid #A89E80' : '2px solid #6B9A7D',
+      color:        isTable ? '#6B6860' : '#2D5A3D',
+      cursor:       isTable ? 'default' : 'pointer',
+      zIndex:       isTable ? 1 : 2,
+      textAlign: 'center', lineHeight: '1.2', padding: '2px',
+    });
+
+    el.textContent = obj.name;
+    if (!isTable) this._bindSeat(el, obj);
+    return el;
+  },
+
+  _bindSeat(el, obj) {
+    let hoverTimer = null;
+
+    el.addEventListener('mouseenter', () => {
+      if (el.dataset.state !== 'selected') {
+        el.style.transform = 'scale(1.06)';
+        if (el.dataset.state !== 'taken') this._applyStyle(el, 'hover');
+      }
+      hoverTimer = setTimeout(() => SeatTooltip.show(obj, el), 180);
+    });
+
+    el.addEventListener('mouseleave', () => {
+      clearTimeout(hoverTimer);
+      SeatTooltip.hide();
+      el.style.transform = '';
+      if (el.dataset.state !== 'selected' && el.dataset.state !== 'taken')
+        this._applyStyle(el, 'default');
+    });
+
+    el.addEventListener('click', () => {
+      SeatTooltip.hide();
+      SeatPopup.show(obj, el);
+    });
+  },
+
+  // Apply a named visual state to a seat element
+  _applyStyle(el, state) {
+    const s = this.STATES[state] || this.STATES.default;
+    Object.assign(el.style, {
+      background: s.bg, borderColor: s.border, color: s.color,
+      cursor: s.cursor, boxShadow: s.shadow,
+    });
+  },
+
+  selectSeat(el, obj) {
+    // Deselect previous
+    if (AppState.selectedSeat) {
+      const prev = this.container.querySelector(`[data-id="${AppState.selectedSeat.id}"]`);
+      if (prev?.dataset.state === 'selected') {
+        prev.dataset.state = '';
+        this._applyStyle(prev, 'default');
+        prev.style.transform = '';
+      }
+    }
+    AppState.selectedSeat = obj;
+    el.dataset.state = 'selected';
+    this._applyStyle(el, 'selected');
+    el.style.transform = 'scale(1.08)';
+  },
+
+  markTaken(seatId) {
+    const el = this._seatEl(seatId);
+    if (!el) return;
+    el.dataset.state = 'taken';
+    this._applyStyle(el, 'taken');
+    el.style.transform = '';
+  },
+
+  _seatEl(id) {
+    const el = this.container?.querySelector(`[data-id="${id}"]`);
+    return el?.dataset.type === 'seat' ? el : null;
+  },
+};
+
+// ─────────────────────────────────────────────
+// SEAT HOVER TOOLTIP
+// ─────────────────────────────────────────────
+const SeatTooltip = {
+  _el:  null,
+  _cache: {},
+  TTL:  60_000, // ms
+
+  async show(obj, anchor) {
+    // Create tooltip immediately (shows loading state)
+    this._mount(obj.name);
+    this._place(anchor);
+
+    let slots = [];
+    try   { slots = await this._fetch(obj.id); }
+    catch { /* silent — tooltip still shows "no data" */ }
+
+    if (!this._el || !document.body.contains(this._el)) return; // hidden while fetching
+    this._render(obj.name, this._calcStatus(slots));
+    this._place(anchor); // re-place now we know real height
+  },
+
+  hide() {
+    if (!this._el) return;
+    Object.assign(this._el.style, { opacity: '0', transform: 'translateY(-4px) scale(.97)' });
+    const el = this._el;
+    this._el = null;
+    setTimeout(() => el.remove(), 150);
+  },
+
+  invalidate(seatId) { delete this._cache[seatId]; },
+
+  // ── private ──────────────────────────────────────────────────────────────
+
+  _mount(name) {
+    if (this._el) { this._el.remove(); this._el = null; }
+    const el = document.createElement('div');
+    el.className = 'seat-tooltip';
+    el.innerHTML = `
+      <div class="stip-name">${name}</div>
+      <div class="stip-loading"><span class="stip-spinner"></span><span>Đang tải...</span></div>`;
+    document.body.appendChild(el);
+    this._el = el;
+    requestAnimationFrame(() => Object.assign(el.style, { opacity: '1', transform: 'translateY(0) scale(1)' }));
+  },
+
+  _place(anchor) {
+    if (!this._el) return;
+    const { top: aT, bottom: aB, left: aL, width: aW } = anchor.getBoundingClientRect();
+    const GAP = 10;
+    const tipH = this._el.offsetHeight || 110;
+    const tipW = this._el.offsetWidth  || 200;
+    const top  = aT >= tipH + GAP ? aT - tipH - GAP : aB + GAP;
+    const left = Math.max(8, Math.min(aL + aW / 2 - tipW / 2, window.innerWidth - tipW - 8));
+    Object.assign(this._el.style, { position: 'fixed', top: top + 'px', left: left + 'px' });
+  },
+
+  async _fetch(seatId) {
+    const now    = Date.now();
+    const cached = this._cache[seatId];
+    if (cached && now - cached.at < this.TTL) return cached.slots;
+    const slots = await Utils.fetchJSON(`/get-seat-schedule?seat_id=${seatId}`);
+    this._cache[seatId] = { slots, at: now };
+    return slots;
+  },
+
+  _calcStatus(slots) {
+    const now = new Date();
+    const active = slots.find(s => {
+      if (!s.start) return false;
+      const start = new Date(s.start);
+      const end   = s.end ? new Date(s.end) : null;
+      return start <= now && (!end || end > now);
+    });
+    if (active) return { state: 'occupied', freeAt: active.end ? new Date(active.end) : null };
+
+    const next = slots
+      .filter(s => s.start && new Date(s.start) > now)
+      .sort((a, b) => new Date(a.start) - new Date(b.start))[0];
+    return { state: 'free', nextBusy: next ? new Date(next.start) : null };
+  },
+
+  _render(name, status) {
+    if (!this._el) return;
+    const now = new Date();
+    let badge = '', detail = '';
+
+    if (status.state === 'occupied') {
+      badge = '<span class="stip-badge occupied">● Đang có người</span>';
+      if (status.freeAt) {
+        const mins    = Math.ceil((status.freeAt - now) / 60_000);
+        const durTxt  = Utils.fmtDuration(mins);
+        const timeTxt = status.freeAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        detail = `<span class="stip-detail">Còn <strong>${durTxt}</strong> nữa trống</span>
+                  <span class="stip-free-at">Trống lúc ${timeTxt}</span>`;
+      } else {
+        detail = '<span class="stip-detail">Chưa rõ giờ trống</span>';
+      }
+    } else {
+      badge = '<span class="stip-badge free">✓ Còn trống</span>';
+      if (status.nextBusy) {
+        const mins    = Math.ceil((status.nextBusy - now) / 60_000);
+        const timeTxt = status.nextBusy.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        detail = mins < 60
+          ? `<span class="stip-detail warn">Sẽ có người sau <strong>${mins} phút</strong></span>`
+          : `<span class="stip-detail">Có người vào lúc <strong>${timeTxt}</strong></span>`;
+      } else {
+        detail = '<span class="stip-detail muted">Không có lịch đặt</span>';
+      }
+    }
+
+    this._el.innerHTML = `
+      <div class="stip-name">${name}</div>
+      ${badge}
+      <div class="stip-details">${detail}</div>
+      <div class="stip-hint">Click để đặt chỗ</div>`;
+  },
+};
+
+// ─────────────────────────────────────────────
+// SEAT BOOKING POPUP  (timeline picker)
+// ─────────────────────────────────────────────
+const SeatPopup = {
+  _s: null,  // state
+  H0: 7, H1: 22,
+
+  async show(obj, el) {
+    this._close();
+    const today = new Date().toISOString().split('T')[0];
+
+    // Reuse SeatTooltip cache if available, otherwise fetch
+    let allSlots = [];
+    try { allSlots = await SeatTooltip._fetch(obj.id); } catch { /* ignore */ }
+
+    const { overlay, modal } = Utils.createSheet('stm-overlay', 'stm-modal', () => this._close());
+    this._s = { modal, overlay, obj, el, selectedDate: today, sel: new Set(), allSlots };
+    this._paint();
+    Utils.openSheet(overlay, modal);
+  },
+
+  _paint() {
+    const { modal, obj, selectedDate, sel, allSlots } = this._s;
+    const booked = this._bookedHours(allSlots, selectedDate);
+    const sorted = [...sel].sort((a, b) => a - b);
+    const range  = this.HOUR_END - this.HOUR_START;
+    const selTxt = sorted.length
+      ? `${this._hh(sorted[0])}:00 – ${this._hh(sorted[sorted.length - 1] + 1)}:00`
       : 'Chưa chọn giờ';
+
+    // Build ruler ticks once
+    const ticks = Array.from({ length: this.H1 - this.H0 + 1 }, (_, i) =>
+      `<div class="stm-ruler-tick">${this._hh(this.H0 + i)}:00</div>`).join('');
+
+    // Build cells
+    const cells = Array.from({ length: this.H1 - this.H0 }, (_, i) => {
+      const h   = this.H0 + i;
+      const cls = booked.has(h) ? 'booked' : sel.has(h) ? 'selected' : 'free';
+      return `<div class="stm-cell ${cls}" data-hour="${h}" onclick="SeatPopup._click(${h})"></div>`;
+    }).join('');
 
     modal.innerHTML = `
       <div class="stm-handle"></div>
-
-      <!-- Header -->
       <div class="stm-header">
         <button class="stm-back" onclick="SeatPopup._close()">‹</button>
         <h3 class="stm-title">Đặt lịch — ${obj.name}</h3>
       </div>
-
-      <!-- Date picker -->
       <div class="stm-date-row">
-        <input type="date" class="stm-date-input" id="stm-date"
-          value="${selectedDate}"
-          min="${new Date().toISOString().split('T')[0]}"
-          onchange="SeatPopup._onDateChange(this.value)" />
+        <input type="date" class="stm-date-input"
+          value="${selectedDate}" min="${new Date().toISOString().split('T')[0]}"
+          onchange="SeatPopup._changeDate(this.value)" />
       </div>
-
-      <!-- Legend -->
       <div class="stm-legend">
         <div class="stm-legend-item"><span class="stm-dot free"></span>Trống</div>
         <div class="stm-legend-item"><span class="stm-dot booked"></span>Đã đặt</div>
         <div class="stm-legend-item"><span class="stm-dot selected"></span>Đang chọn</div>
       </div>
-
-      <!-- Timeline -->
       <div class="stm-timeline-wrap">
-        <!-- Hour ruler -->
         <div class="stm-ruler">
           <div class="stm-row-label"></div>
-          <div class="stm-ruler-hours">
-            ${Array.from({length: totalHours + 1}, (_,i) => {
-              const h = this.HOUR_START + i;
-              return `<div class="stm-ruler-tick">${String(h).padStart(2,'0')}:00</div>`;
-            }).join('')}
-          </div>
+          <div class="stm-ruler-hours">${ticks}</div>
         </div>
-        <!-- Seat row -->
-        ${seatRow}
+        <div class="stm-row">
+          <div class="stm-row-label">${obj.name}</div>
+          <div class="stm-row-cells" id="stm-cells">${cells}</div>
+        </div>
       </div>
-
-      <!-- Selected summary -->
       <div class="stm-summary">
         <div class="stm-summary-info">
           <span class="stm-summary-label">Thời gian chọn</span>
-          <span class="stm-summary-val" id="stm-sel-text">${selText}</span>
+          <span class="stm-summary-val" id="stm-sel-text">${selTxt}</span>
         </div>
-        <div class="stm-summary-dur">
-          <span>${sortedSlots.length} giờ</span>
-        </div>
+        <div class="stm-summary-dur"><span id="stm-dur-text">${sorted.length} giờ</span></div>
       </div>
-
-      <!-- CTA -->
       <div class="stm-footer">
-        <button class="stm-btn-confirm" onclick="SeatPopup._confirm()" ${selectedSlots.size === 0 ? 'disabled' : ''}>
-          TIẾP THEO
+        <button class="stm-btn-confirm" onclick="SeatPopup._confirm()" ${sel.size ? '' : 'disabled'}>
+          XÁC NHẬN ĐẶT CHỖ
         </button>
-      </div>
-    `;
-
-    // Attach drag-select on timeline cells
-    this._attachDragSelect();
-  },
-
-  _buildTimelineRow(seatName, bookedHours, selectedSlots) {
-    const totalHours = this.HOUR_END - this.HOUR_START;
-    const cells = Array.from({length: totalHours}, (_, i) => {
-      const h = this.HOUR_START + i;
-      const isBooked   = bookedHours.has(h);
-      const isSelected = selectedSlots.has(h);
-      let cls = 'stm-cell free';
-      if (isBooked)   cls = 'stm-cell booked';
-      if (isSelected) cls = 'stm-cell selected';
-      return `<div class="${cls}" data-hour="${h}" ${isBooked ? '' : `onclick="SeatPopup._toggleHour(${h})"`}></div>`;
-    }).join('');
-
-    return `
-      <div class="stm-row">
-        <div class="stm-row-label">${seatName}</div>
-        <div class="stm-row-cells" id="stm-cells">${cells}</div>
       </div>`;
   },
 
-  _getBookedHours(allSlots, dateStr) {
+  // Build set of booked hours for a date — called once per paint/click
+  _bookedHours(slots, dateStr) {
     const booked = new Set();
-    const dayStart = new Date(dateStr + 'T00:00:00');
-    const dayEnd   = new Date(dateStr + 'T23:59:59');
+    const dStart = new Date(dateStr + 'T00:00:00');
+    const dEnd   = new Date(dateStr + 'T23:59:59');
+    const FAR    = new Date(8_640_000_000_000_000);
 
-    allSlots.forEach(s => {
-      const start = s.start ? new Date(s.start) : null;
-      const end   = s.end   ? new Date(s.end)   : null;
-      if (!start) return;
-      const bEnd = end || new Date(8640000000000000);
-      if (start > dayEnd || bEnd < dayStart) return;
-
-      // Mark each overlapping hour
-      for (let h = this.HOUR_START; h < this.HOUR_END; h++) {
-        const slotStart = new Date(dateStr + `T${String(h).padStart(2,'0')}:00:00`);
-        const slotEnd   = new Date(dateStr + `T${String(h+1).padStart(2,'0')}:00:00`);
-        if (start < slotEnd && bEnd > slotStart) booked.add(h);
+    for (const s of slots) {
+      if (!s.start) continue;
+      const sS = new Date(s.start);
+      const sE = s.end ? new Date(s.end) : FAR;
+      if (sS > dEnd || sE < dStart) continue;
+      for (let h = this.H0; h < this.H1; h++) {
+        const hS = new Date(`${dateStr}T${this._hh(h)}:00:00`);
+        const hE = new Date(`${dateStr}T${this._hh(h + 1)}:00:00`);
+        if (sS < hE && sE > hS) booked.add(h);
       }
-    });
+    }
     return booked;
   },
 
-  _toggleHour(h) {
-    const { selectedSlots, allSlots, selectedDate } = this._state;
-    const bookedHours = this._getBookedHours(allSlots, selectedDate);
-    if (bookedHours.has(h)) return;
+  _click(h) {
+    const { sel, allSlots, selectedDate } = this._s;
+    if (this._bookedHours(allSlots, selectedDate).has(h)) return;
 
-    if (selectedSlots.has(h)) selectedSlots.delete(h);
-    else selectedSlots.add(h);
-
-    // Re-render only the cells + summary (fast update)
-    this._updateCells();
-    this._updateSummary();
+    if (sel.has(h)) {
+      const sorted = [...sel].sort((a, b) => a - b);
+      if (h === sorted[0] || h === sorted[sorted.length - 1]) sel.delete(h);
+      else { this._hint('Chỉ có thể bỏ chọn ô đầu hoặc cuối'); return; }
+    } else {
+      sel.add(h);
+    }
+    this._refreshTimeline();
   },
 
-  _updateCells() {
-    const { selectedSlots, allSlots, selectedDate } = this._state;
-    const bookedHours = this._getBookedHours(allSlots, selectedDate);
-    const container = document.getElementById('stm-cells');
-    if (!container) return;
-    container.querySelectorAll('.stm-cell').forEach(cell => {
-      const h = parseInt(cell.dataset.hour);
-      cell.className = 'stm-cell ' + (bookedHours.has(h) ? 'booked' : selectedSlots.has(h) ? 'selected' : 'free');
+  // Update cells + summary without full re-render
+  _refreshTimeline() {
+    const { sel, allSlots, selectedDate } = this._s;
+    const booked  = this._bookedHours(allSlots, selectedDate);
+    const sorted  = [...sel].sort((a, b) => a - b);
+
+    document.getElementById('stm-cells')?.querySelectorAll('.stm-cell').forEach(cell => {
+      const h = +cell.dataset.hour;
+      cell.className = `stm-cell ${booked.has(h) ? 'booked' : sel.has(h) ? 'selected' : 'free'}`;
     });
-  },
 
-  _updateSummary() {
-    const { selectedSlots } = this._state;
-    const sorted = [...selectedSlots].sort((a,b) => a-b);
-    const selText = sorted.length
-      ? `${String(sorted[0]).padStart(2,'0')}:00 – ${String(sorted[sorted.length-1]+1).padStart(2,'0')}:00`
+    const selTxt = sorted.length
+      ? `${this._hh(sorted[0])}:00 – ${this._hh(sorted[sorted.length - 1] + 1)}:00`
       : 'Chưa chọn giờ';
-    const el = document.getElementById('stm-sel-text');
-    if (el) el.textContent = selText;
-
-    // Update duration display
-    const durEl = document.querySelector('.stm-summary-dur span');
+    const selEl = document.getElementById('stm-sel-text');
+    if (selEl) selEl.textContent = selTxt;
+    const durEl = document.getElementById('stm-dur-text');
     if (durEl) durEl.textContent = `${sorted.length} giờ`;
-
-    // Enable/disable confirm btn
     const btn = document.querySelector('.stm-btn-confirm');
-    if (btn) btn.disabled = sorted.length === 0;
+    if (btn) btn.disabled = !sorted.length;
   },
 
-  _onDateChange(newDate) {
-    this._state.selectedDate = newDate;
-    this._state.selectedSlots = new Set();
-    this._renderModal();
+  _hint(msg) {
+    if (document.getElementById('stm-hint')) return;
+    const el = document.createElement('div');
+    el.id        = 'stm-hint';
+    el.className = 'stm-hint-toast';
+    el.textContent = msg;
+    this._s.modal.style.position = 'relative';
+    this._s.modal.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 200); }, 1800);
   },
 
-  _attachDragSelect() {
-    const container = document.getElementById('stm-cells');
-    if (!container) return;
-    let dragging = false;
-    let dragMode = null; // 'add' | 'remove'
-
-    const getHour = el => parseInt(el.dataset.hour);
-
-    container.addEventListener('mousedown', e => {
-      const cell = e.target.closest('.stm-cell');
-      if (!cell || cell.classList.contains('booked')) return;
-      dragging = true;
-      const h = getHour(cell);
-      dragMode = this._state.selectedSlots.has(h) ? 'remove' : 'add';
-      this._applyDrag(h, dragMode);
-      e.preventDefault();
-    });
-
-    container.addEventListener('mouseover', e => {
-      if (!dragging) return;
-      const cell = e.target.closest('.stm-cell');
-      if (!cell || cell.classList.contains('booked')) return;
-      this._applyDrag(getHour(cell), dragMode);
-    });
-
-    document.addEventListener('mouseup', () => { dragging = false; }, { once: false });
-
-    // Touch support
-    container.addEventListener('touchstart', e => {
-      const touch = e.touches[0];
-      const cell = document.elementFromPoint(touch.clientX, touch.clientY)?.closest('.stm-cell');
-      if (!cell || cell.classList.contains('booked')) return;
-      dragging = true;
-      const h = getHour(cell);
-      dragMode = this._state.selectedSlots.has(h) ? 'remove' : 'add';
-      this._applyDrag(h, dragMode);
-    }, { passive: true });
-
-    container.addEventListener('touchmove', e => {
-      if (!dragging) return;
-      const touch = e.touches[0];
-      const cell = document.elementFromPoint(touch.clientX, touch.clientY)?.closest('.stm-cell');
-      if (!cell || cell.classList.contains('booked')) return;
-      this._applyDrag(getHour(cell), dragMode);
-    }, { passive: true });
-
-    container.addEventListener('touchend', () => { dragging = false; });
+  _changeDate(date) {
+    this._s.selectedDate = date;
+    this._s.sel          = new Set();
+    this._paint();
   },
 
-  _applyDrag(h, mode) {
-    if (mode === 'add') this._state.selectedSlots.add(h);
-    else this._state.selectedSlots.delete(h);
-    this._updateCells();
-    this._updateSummary();
-  },
+  async _confirm() {
+    const { obj, el, selectedDate, sel } = this._s;
+    if (!sel.size) return;
 
-  _confirm() {
-    const { obj, el, selectedDate, selectedSlots } = this._state;
-    if (selectedSlots.size === 0) return;
+    const sorted  = [...sel].sort((a, b) => a - b);
+    const timeStr = `${this._hh(sorted[0])}:00 – ${this._hh(sorted[sorted.length - 1] + 1)}:00`;
+    const btn     = document.querySelector('.stm-btn-confirm');
+    if (btn) { btn.disabled = true; btn.textContent = 'Đang đặt...'; }
 
-    const sorted = [...selectedSlots].sort((a,b) => a-b);
-    const timeStr = `${String(sorted[0]).padStart(2,'0')}:00 – ${String(sorted[sorted.length-1]+1).padStart(2,'0')}:00`;
-
-    // Select the seat + store booking info
-    AppState.selectedSeat = obj;
-    AppState.pendingBooking = { date: selectedDate, timeStr, hours: sorted };
-
-    // Update UI info text
-    const info = document.getElementById('selected-info');
-    if (info) info.textContent = `${obj.name} — ${selectedDate.split('-').reverse().join('/')} · ${timeStr}`;
-
-    // Highlight seat as selected
-    LayoutRenderer._selectSeat(el, obj);
-
-    this._close();
-    Utils.showToast(`Đã chọn ${obj.name} · ${timeStr}`);
+    try {
+      const res = await Utils.post('/book-seat', { seatId: obj.id, date: selectedDate, hours: sorted });
+      if (res.success) {
+        const info = document.getElementById('selected-info');
+        if (info) info.textContent = `${obj.name} — ${selectedDate.split('-').reverse().join('/')} · ${timeStr}`;
+        LayoutRenderer.selectSeat(el, obj);
+        SeatTooltip.invalidate(obj.id);
+        this._close();
+        Utils.showToast(`Đã đặt ${obj.name} · ${timeStr}`, 'success');
+        Booking.loadMyBookings(); // no await — fire-and-forget
+      } else {
+        const msgs = {
+          TimeConflict:  'Thời gian đã bị đặt, vui lòng chọn giờ khác',
+          UserNotFound:  'Không tìm thấy tài khoản',
+          BookingFailed: 'Đặt chỗ thất bại, thử lại sau',
+          MissingFields: 'Thiếu thông tin đặt chỗ',
+        };
+        Utils.showToast(msgs[res.error] || 'Đặt chỗ thất bại', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'XÁC NHẬN ĐẶT CHỖ'; }
+      }
+    } catch {
+      Utils.showToast('Lỗi kết nối server', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'XÁC NHẬN ĐẶT CHỖ'; }
+    }
   },
 
   _close() {
-    if (!this._state) return;
-    const { modal, overlay } = this._state;
-    modal.classList.remove('open');
-    overlay.classList.remove('open');
-    setTimeout(() => { modal.remove(); overlay.remove(); }, 300);
-    this._state = null;
-  }
-};
-
-// ===== BOOKING =====
-const Booking = {
-  async confirm() {
-    if (!AppState.selectedSeat) return Utils.showToast('Vui lòng chọn chỗ ngồi');
-
-    const date = document.getElementById('book-date').value;
-    if (!date) return Utils.showToast('Vui lòng chọn ngày');
-    const time = document.getElementById('book-time').value;
-
-    // TODO: POST to /book-seat with seat id, date, time
-    Utils.showToast(`Đặt ${AppState.selectedSeat.name} thành công!`);
-
-    AppState.myBookings.push({
-      id: AppState.selectedSeat.id,
-      seat: AppState.selectedSeat.name,
-      date: date.split('-').reverse().join('/'),
-      time
-    });
-
-    // Mark as taken in UI
-    LayoutRenderer.markSeatTaken(AppState.selectedSeat.id);
-    AppState.selectedSeat = null;
-    document.getElementById('selected-info').textContent = 'Vui lòng chọn một chỗ ngồi từ sơ đồ';
+    if (!this._s) return;
+    Utils.closeSheet(this._s.overlay, this._s.modal);
+    this._s = null;
   },
 
-  cancel(seatName) {
-    const idx = AppState.myBookings.findIndex(b => b.seat === seatName);
-    if (idx === -1) return;
-
-    const booking = AppState.myBookings.splice(idx, 1)[0];
-
-    // Restore seat in UI
-    const el = LayoutRenderer.container?.querySelector(`[data-id="${booking.id}"]`);
-    if (el) {
-      el.dataset.state = '';
-      Object.assign(el.style, {
-        background: '#fff',
-        borderColor: '#6B9A7D',
-        color: '#2D5A3D',
-        cursor: 'pointer'
-      });
-    }
-
-    Modal.openManage('seats');
-    Utils.showToast(`Đã hủy chỗ ${seatName}`);
-  }
+  _hh: h => String(h).padStart(2, '0'),
 };
 
-// ===== BOOKS =====
+// ─────────────────────────────────────────────
+// BOOKING  (my-bookings CRUD)
+// ─────────────────────────────────────────────
+const Booking = {
+  async loadMyBookings() {
+    try { AppState.myBookings = await Utils.fetchJSON('/my-bookings'); }
+    catch(e) { console.error('loadMyBookings:', e); }
+  },
+
+  async cancel(bookingId) {
+    try {
+      const res = await Utils.post('/cancel-my-booking', { id: bookingId });
+      if (res.success) {
+        const hit = AppState.myBookings.find(b => b.bookingId === bookingId);
+        if (hit) SeatTooltip.invalidate(hit.seatId);
+        Utils.showToast('Đã hủy đặt chỗ!', 'success');
+        await this.loadMyBookings();
+        Modal.openManage('seats');
+      } else {
+        Utils.showToast('Hủy thất bại', 'error');
+      }
+    } catch {
+      Utils.showToast('Lỗi kết nối server', 'error');
+    }
+  },
+};
+
+// ─────────────────────────────────────────────
+// BOOK BORROW POPUP
+// ─────────────────────────────────────────────
+const BookPopup = {
+  _s: null,
+  MAX_DAYS: 90,
+  PRESETS: [
+    { label: '3 ngày', days: 3  },
+    { label: '1 tuần', days: 7  },
+    { label: '2 tuần', days: 14 },
+    { label: '1 tháng', days: 30 },
+  ],
+
+  show(book) {
+    this._close();
+    const { overlay, modal } = Utils.createSheet('bpop-overlay', 'bpop-modal', () => this._close());
+    this._s = { overlay, modal, book, days: 14 };
+    this._paint();
+    Utils.openSheet(overlay, modal);
+  },
+
+  _paint() {
+    const { modal, book, days } = this._s;
+    const color    = Books.COLORS[AppState.books.findIndex(b => b.id === book.id) % 8] || '#EAF3DE';
+    const dueTxt   = this._fmtDue(days);
+    const presetBtns = this.PRESETS.map(p =>
+      `<button class="bpop-preset${p.days === days ? ' active' : ''}"
+        onclick="BookPopup._preset(${p.days})">${p.label}</button>`).join('');
+
+    modal.innerHTML = `
+      <div class="bpop-handle"></div>
+      <div class="bpop-book-row">
+        <div class="bpop-cover" style="background:${color}">📚</div>
+        <div class="bpop-book-info">
+          <div class="bpop-book-title">${book.title}</div>
+          <div class="bpop-book-author">${book.author}</div>
+          <span class="bpop-avail-badge">Còn sách</span>
+        </div>
+      </div>
+      <div class="bpop-divider"></div>
+      <div class="bpop-section-label">Thời hạn mượn</div>
+      <div class="bpop-presets">${presetBtns}</div>
+      <div class="bpop-custom-row">
+        <span class="bpop-custom-label">Hoặc nhập số ngày:</span>
+        <div class="bpop-stepper">
+          <button class="bpop-step-btn" onclick="BookPopup._step(-1)">−</button>
+          <input class="bpop-step-input" type="number" id="bpop-days"
+            value="${days}" min="1" max="${this.MAX_DAYS}"
+            oninput="BookPopup._input(this.value)" />
+          <button class="bpop-step-btn" onclick="BookPopup._step(1)">+</button>
+        </div>
+        <span class="bpop-custom-unit">ngày</span>
+      </div>
+      <div class="bpop-due-box" id="bpop-due-box">
+        <div class="bpop-due-label">Hạn trả sách</div>
+        <div class="bpop-due-date" id="bpop-due-date">${dueTxt}</div>
+        <div class="bpop-due-note">Vui lòng trả sách trước hoặc đúng ngày trên</div>
+      </div>
+      <div class="bpop-notice">
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="10" cy="10" r="8"/><path d="M10 9v5M10 6.5v.5"/>
+        </svg>
+        Bạn có thể mượn tối đa 3 quyển cùng lúc
+      </div>
+      <div class="bpop-footer">
+        <button class="bpop-btn-cancel" onclick="BookPopup._close()">Hủy</button>
+        <button class="bpop-btn-confirm" id="bpop-ok" onclick="BookPopup._confirm()">Xác nhận mượn</button>
+      </div>`;
+  },
+
+  _preset(days) {
+    this._setDays(days);
+  },
+
+  _step(delta) {
+    this._setDays(this._s.days + delta);
+  },
+
+  _input(val) {
+    this._setDays(parseInt(val) || 1);
+  },
+
+  _setDays(days) {
+    days = Math.max(1, Math.min(this.MAX_DAYS, days));
+    this._s.days = days;
+
+    // Update input
+    const inp = document.getElementById('bpop-days');
+    if (inp) inp.value = days;
+
+    // Update preset active states
+    document.querySelectorAll('.bpop-preset').forEach(btn => {
+      const match = this.PRESETS.find(p => p.days === days);
+      btn.classList.toggle('active', !!match && btn.textContent.trim() === match.label);
+    });
+
+    // Update due date with pulse
+    const el  = document.getElementById('bpop-due-date');
+    if (el) el.textContent = this._fmtDue(days);
+    const box = document.getElementById('bpop-due-box');
+    if (box) { box.classList.remove('pulse'); void box.offsetWidth; box.classList.add('pulse'); }
+  },
+
+  _fmtDue(days) {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return d.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+  },
+
+  async _confirm() {
+    const { book, days } = this._s;
+    const btn = document.getElementById('bpop-ok');
+    if (btn) { btn.disabled = true; btn.textContent = 'Đang xử lý...'; }
+
+    try {
+      const res = await Utils.post('/borrow-book', { bookId: book.id, dueDays: days });
+      if (res.success) {
+        AppState.myBorrows = await Utils.fetchJSON('/my-borrows');
+        // Optimistic local update — avoid full re-fetch
+        const lb = AppState.books.find(b => b.id === book.id);
+        if (lb) lb.status = false;
+        Books.render();
+        this._close();
+        Utils.showToast(`Đã mượn "${book.title}" — hạn trả ${res.due}`, 'success');
+      } else {
+        const msgs = {
+          BorrowLimit:     'Bạn đang mượn tối đa 3 quyển',
+          BorrowFailed:    'Mượn sách thất bại',
+          BookUnavailable: 'Sách hiện không khả dụng',
+        };
+        Utils.showToast(msgs[res.error] || 'Mượn sách thất bại', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Xác nhận mượn'; }
+      }
+    } catch {
+      Utils.showToast('Lỗi kết nối server', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Xác nhận mượn'; }
+    }
+  },
+
+  _close() {
+    if (!this._s) return;
+    Utils.closeSheet(this._s.overlay, this._s.modal);
+    this._s = null;
+  },
+};
+
+// ─────────────────────────────────────────────
+// RETURN CONFIRM SHEET
+// ─────────────────────────────────────────────
+const ReturnConfirm = {
+  _el: null,
+
+  show(borrow) {
+    this._dismiss();
+    const sheet   = document.createElement('div');
+    sheet.className = 'rconf-sheet';
+    const today   = new Date().toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const over    = borrow.overdue;
+
+    const warnSvg = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+    const checkSvg = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <path d="M4 4h12c1 0 2 .9 2 2v13c0 1-.9 2-2 2H4"/><path d="M4 4A2 2 0 0 0 2 6v13c0 1 .9 2 2 2"/>
+      <path d="M9 12l2 2 4-4"/></svg>`;
+
+    sheet.innerHTML = `
+      <div class="rconf-handle"></div>
+      <div class="rconf-icon${over ? ' overdue' : ''}">${over ? warnSvg : checkSvg}</div>
+      <h3 class="rconf-title">Xác nhận trả sách</h3>
+      <div class="rconf-book-name">${borrow.title}</div>
+      <div class="rconf-author">${borrow.author}</div>
+      <div class="rconf-info-grid">
+        <div class="rconf-info-row">
+          <span class="rconf-info-label">Hạn trả</span>
+          <span class="rconf-info-val${over ? ' overdue-text' : ''}">${borrow.due}</span>
+        </div>
+        <div class="rconf-info-row">
+          <span class="rconf-info-label">Trả hôm nay</span>
+          <span class="rconf-info-val">${today}</span>
+        </div>
+        ${over ? `<div class="rconf-overdue-warn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          Sách đã quá hạn. Vui lòng liên hệ thủ thư nếu cần hỗ trợ.
+        </div>` : ''}
+      </div>
+      <div class="rconf-footer">
+        <button class="rconf-btn-cancel" onclick="ReturnConfirm._dismiss()">Hủy</button>
+        <button class="rconf-btn-confirm" id="rconf-ok" onclick="ReturnConfirm._submit(${borrow.borrowId})">
+          Xác nhận trả
+        </button>
+      </div>`;
+
+    document.body.appendChild(sheet);
+    this._el = sheet;
+    requestAnimationFrame(() => sheet.classList.add('open'));
+  },
+
+  async _submit(borrowId) {
+    const btn = document.getElementById('rconf-ok');
+    if (btn) { btn.disabled = true; btn.textContent = 'Đang xử lý...'; }
+
+    try {
+      const res = await Utils.post('/return-book', { borrowId });
+      if (res.success) {
+        this._dismiss();
+        // Parallel refresh
+        [AppState.myBorrows, AppState.books] = await Promise.all([
+          Utils.fetchJSON('/my-borrows'),
+          Utils.fetchJSON('/get-booklist'),
+        ]);
+        Books.render();
+        Utils.showToast('Đã trả sách!', 'success');
+        Modal.openManage('books');
+      } else {
+        Utils.showToast('Trả sách thất bại', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Xác nhận trả'; }
+      }
+    } catch {
+      Utils.showToast('Lỗi kết nối server', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Xác nhận trả'; }
+    }
+  },
+
+  _dismiss() {
+    if (!this._el) return;
+    this._el.classList.remove('open');
+    const el = this._el;
+    this._el = null;
+    setTimeout(() => el.remove(), 280);
+  },
+};
+
+// ─────────────────────────────────────────────
+// BOOKS
+// ─────────────────────────────────────────────
 const Books = {
   COLORS: ['#EAF3DE','#E6F1FB','#FAEEDA','#FBEAF0','#E1F5EE','#FAECE7','#EEEDFE','#F3ECE7'],
+  MAX: 3,
 
   async load() {
     try {
       AppState.books = await Utils.fetchJSON('/get-booklist');
       this.render();
-    } catch (e) {
-      console.error('Failed to load books:', e);
-    }
+    } catch(e) { console.error('load books:', e); }
   },
 
   render() {
+    const grid  = document.getElementById('books-grid');
+    if (!grid) return;
+    const active   = AppState.myBorrows.length;
+    const canBorrow = active < this.MAX;
+
+    grid.innerHTML = AppState.books.map((book, i) => {
+      const color    = this.COLORS[i % this.COLORS.length];
+      const initials = book.title.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
+      const isMine   = AppState.myBorrows.some(b => b.bookId === book.id);
+      const avail    = book.status && !isMine;
+      const disabled = !avail || !canBorrow;
+      const label    = isMine ? 'Đang mượn' : !book.status ? 'Hết sách'
+                     : !canBorrow ? 'Đã đủ 3 quyển' : 'Mượn sách';
+      return `
+        <div class="book-card" data-title="${book.title.toLowerCase()}" data-author="${book.author.toLowerCase()}">
+          <div class="book-cover" style="background:${color}">
+            <span class="book-cover-initials">${initials}</span>
+            ${!book.status ? '<div class="book-cover-unavail">Hết</div>' : ''}
+          </div>
+          <div class="book-info">
+            <div class="book-title">${book.title}</div>
+            <div class="book-author">${book.author}</div>
+            <div class="book-meta-row">
+              <span class="book-status ${avail ? 'avail' : 'out'}">
+                ${isMine ? 'Đang mượn' : book.status ? 'Còn sách' : 'Hết sách'}
+              </span>
+              ${book.borrowedCount > 0
+                ? `<span class="book-borrow-count">${book.borrowedCount} lượt</span>` : ''}
+            </div>
+            <button class="btn-borrow${disabled ? ' disabled' : ''}"
+              ${disabled ? 'disabled' : ''} onclick="Books.openBorrow(${book.id})">
+              ${label}
+            </button>
+          </div>
+        </div>`;
+    }).join('');
+
+    this._quota(active);
+  },
+
+  _quota(active) {
+    let bar = document.getElementById('borrow-quota-bar');
     const grid = document.getElementById('books-grid');
     if (!grid) return;
-
-    grid.innerHTML = AppState.books.map((book, i) => `
-      <div class="book-card" data-title="${book.title.toLowerCase()}" data-author="${book.author.toLowerCase()}">
-        <div class="book-cover" style="background:${this.COLORS[i % 8]}">📚</div>
-        <div class="book-info">
-          <div class="book-title">${book.title}</div>
-          <div class="book-author">${book.author}</div>
-          <span class="book-status ${book.status ? 'avail' : 'out'}">
-            ${book.status ? 'Còn sách' : 'Đã mượn hết'}
-          </span>
-          <button class="btn-borrow" ${book.status ? '' : 'disabled'} onclick="Books.borrow(${book.id})">
-            ${book.status ? 'Mượn sách' : 'Không khả dụng'}
-          </button>
-        </div>
+    if (!bar) {
+      bar = Object.assign(document.createElement('div'), { id: 'borrow-quota-bar', className: 'borrow-quota-bar' });
+      grid.parentElement.insertBefore(bar, grid);
+    }
+    const pct   = Math.round((active / this.MAX) * 100);
+    const color = active >= this.MAX ? '#C0392B' : active >= 2 ? '#C8A96E' : '#2D5A3D';
+    bar.innerHTML = `
+      <div class="bqb-label">
+        <span>Sách đang mượn</span>
+        <span class="bqb-count" style="color:${color}">${active} / ${this.MAX} quyển</span>
       </div>
-    `).join('');
+      <div class="bqb-track"><div class="bqb-fill" style="width:${pct}%;background:${color}"></div></div>`;
   },
 
-  async borrow(bookId) {
+  openBorrow(bookId) {
     const book = AppState.books.find(b => b.id === bookId);
-    if (!book?.status) return;
-
-    // TODO: POST to /borrow-book
-    book.status = false;
-
-    const due = new Date();
-    due.setDate(due.getDate() + 14);
-    const dueStr = due.toLocaleDateString('vi-VN');
-
-    AppState.myBorrows.push({ id: bookId, title: book.title, author: book.author, due: dueStr });
-    this.render();
-    Utils.showToast(`Đã mượn "${book.title}" — hạn trả ${dueStr}`);
+    if (book?.status) BookPopup.show(book);
   },
 
-  return(title) {
-    const idx = AppState.myBorrows.findIndex(b => b.title === title);
-    if (idx === -1) return;
-
-    AppState.myBorrows.splice(idx, 1);
-    const book = AppState.books.find(b => b.title === title);
-    if (book) { book.status = true; this.render(); }
-
-    Modal.openManage('books');
-    Utils.showToast(`Đã trả "${title}" thành công!`);
+  confirmReturn(borrowId) {
+    const borrow = AppState.myBorrows.find(b => b.borrowId === borrowId);
+    if (borrow) ReturnConfirm.show(borrow);
   },
 
   filter() {
-    const q = document.getElementById('search-input').value.toLowerCase();
+    const q = document.getElementById('search-input')?.value.toLowerCase() || '';
     document.querySelectorAll('.book-card').forEach(card => {
       card.style.display =
-        (card.dataset.title.includes(q) || card.dataset.author.includes(q)) ? '' : 'none';
+        card.dataset.title.includes(q) || card.dataset.author.includes(q) ? '' : 'none';
     });
-  }
+  },
 };
 
-// ===== NAVIGATION =====
+// ─────────────────────────────────────────────
+// NAVIGATION
+// ─────────────────────────────────────────────
 const Navigation = {
   switchPage(page) {
     document.querySelectorAll('.page-content').forEach(c => c.classList.remove('active'));
     document.getElementById(`page-${page}`)?.classList.add('active');
-    // Navbar (desktop)
-    document.getElementById('nav-seat').classList.toggle('active', page === 'seat');
-    document.getElementById('nav-book').classList.toggle('active', page === 'book');
-    // Tab bar (iOS/mobile)
+    document.getElementById('nav-seat')?.classList.toggle('active', page === 'seat');
+    document.getElementById('nav-book')?.classList.toggle('active', page === 'book');
     document.querySelectorAll('.tab-bar-item').forEach(el => el.classList.remove('active'));
-    const tabMap = { seat: 'tab-seat', book: 'tab-book' };
-    if (tabMap[page]) document.getElementById(tabMap[page])?.classList.add('active');
+    document.getElementById({ seat: 'tab-seat', book: 'tab-book' }[page])?.classList.add('active');
   },
-
-  toggleDropdown() {
-    document.getElementById('dropdown').classList.toggle('open');
-  },
-
-  closeDropdown() {
-    document.getElementById('dropdown').classList.remove('open');
-  }
+  toggleDropdown()  { document.getElementById('dropdown').classList.toggle('open'); },
+  closeDropdown()   { document.getElementById('dropdown').classList.remove('open'); },
 };
 
-// ===== MODAL =====
+// ─────────────────────────────────────────────
+// MODAL  (manage sheets: seats / books / profile)
+// ─────────────────────────────────────────────
 const Modal = {
-  openManage(type) {
+  async openManage(type) {
     Navigation.closeDropdown();
+
+    // Refresh relevant data
+    if (type === 'seats')       await Booking.loadMyBookings();
+    else if (type === 'books')  { try { AppState.myBorrows = await Utils.fetchJSON('/my-borrows'); } catch {} }
+
     const overlay = document.getElementById('modal-overlay');
-    const body = document.getElementById('modal-body');
+    const body    = document.getElementById('modal-body');
     const titleEl = document.getElementById('modal-title-text');
-
-    const configs = {
-      seats:   { title: 'Chỗ ngồi đã đặt',  html: this._renderSeats() },
-      books:   { title: 'Sách đang mượn',    html: this._renderBooks() },
-      profile: { title: 'Sửa thông tin',     html: this._renderProfile() }
-    };
-
-    const config = configs[type];
-    if (!config) return;
-
-    titleEl.textContent = config.title;
-    body.innerHTML = config.html;
+    const cfg     = { seats: ['Chỗ ngồi đã đặt', this._seats()], books: ['Sách đang mượn', this._books()], profile: ['Sửa thông tin', this._profile()] }[type];
+    if (!cfg) return;
+    [titleEl.textContent, body.innerHTML] = cfg;
     overlay.classList.add('open');
   },
 
-  _renderSeats() {
-    if (!AppState.myBookings.length)
-      return '<p style="color:var(--muted);text-align:center;padding:2rem">Bạn chưa có đặt chỗ nào</p>';
-    return AppState.myBookings.map(b => `
+  _seats() {
+    const bs = AppState.myBookings;
+    if (!bs.length)
+      return '<p style="color:var(--text-3);text-align:center;padding:2rem">Bạn chưa có đặt chỗ nào</p>';
+    return bs.map(b => `
       <div class="manage-item">
         <div class="manage-info">
-          <strong>Chỗ ${b.seat}</strong>
-          <span>${b.date} · ${b.time}</span>
+          <strong>${b.seatName}</strong>
+          <span>${b.startFmt} → ${b.endFmt}</span>
+          <span style="margin-top:2px">${b.active
+            ? '<span style="color:#C0392B;font-size:11px;font-weight:600">● Đang thuê</span>'
+            : '<span style="color:#27AE60;font-size:11px;font-weight:600">✓ Đã kết thúc</span>'}</span>
         </div>
-        <button class="btn-cancel" onclick="Booking.cancel('${b.seat}')">Hủy</button>
+        ${b.active ? `<button class="btn-cancel" onclick="Booking.cancel(${b.bookingId})">Hủy</button>` : ''}
       </div>`).join('');
   },
 
-  _renderBooks() {
-    if (!AppState.myBorrows.length)
-      return '<p style="color:var(--muted);text-align:center;padding:2rem">Bạn chưa mượn sách nào</p>';
-    return AppState.myBorrows.map(b => `
-      <div class="manage-item">
+  _books() {
+    const bs  = AppState.myBorrows;
+    const MAX = Books.MAX;
+    const pct = Math.round((bs.length / MAX) * 100);
+    const col = bs.length >= MAX ? '#C0392B' : bs.length >= 2 ? '#C8A96E' : '#2D5A3D';
+
+    const header = `
+      <div class="modal-borrow-header">
+        <div class="mbh-quota">
+          <span class="mbh-label">Đang mượn</span>
+          <span class="mbh-val" style="color:${col}">${bs.length}/${MAX} quyển</span>
+        </div>
+        <div class="mbh-track"><div class="mbh-fill" style="width:${pct}%;background:${col}"></div></div>
+      </div>`;
+
+    if (!bs.length)
+      return header + '<p style="color:var(--text-3);text-align:center;padding:1.5rem">Bạn chưa mượn sách nào</p>';
+
+    return header + bs.map(b => `
+      <div class="manage-item${b.overdue ? ' overdue-item' : ''}">
         <div class="manage-info">
           <strong>${b.title}</strong>
-          <span>${b.author} · Hạn trả: ${b.due}</span>
+          <span class="manage-author">${b.author}</span>
+          ${b.overdue
+            ? `<span class="borrow-due overdue">⚠ Quá hạn — ${b.due}</span>`
+            : `<span class="borrow-due">Hạn trả: <strong>${b.due}</strong></span>`}
         </div>
-        <button class="btn-cancel" onclick="Books.return('${b.title}')">Trả sách</button>
+        <button class="btn-cancel${b.overdue ? ' btn-return-overdue' : ''}"
+          onclick="Books.confirmReturn(${b.borrowId})">Trả sách</button>
       </div>`).join('');
   },
 
-  _renderProfile() {
+  _profile() {
     return `
       <div class="form-group">
         <label>Họ và tên</label>
@@ -687,65 +1003,73 @@ const Modal = {
       <button class="btn-book" onclick="Profile.save()">Lưu thay đổi</button>`;
   },
 
-  close() {
-    document.getElementById('modal-overlay').classList.remove('open');
-  }
+  close() { document.getElementById('modal-overlay').classList.remove('open'); },
 };
 
-// ===== PROFILE =====
+// ─────────────────────────────────────────────
+// PROFILE
+// ─────────────────────────────────────────────
 const Profile = {
   async save() {
-    const name = document.getElementById('user-name').value.trim();
-    const password = document.getElementById('user-password').value;
-    if (!name) return Utils.showToast('Vui lòng nhập họ tên');
-
+    const name     = document.getElementById('user-name')?.value.trim();
+    const password = document.getElementById('user-password')?.value || '';
+    if (!name) return Utils.showToast('Vui lòng nhập họ tên', 'error');
     try {
-      const result = await Utils.fetchJSON('/update-profile', {
-        method: 'POST',
-        body: JSON.stringify({ name, password })
-      });
-      if (result.success) {
+      const res = await Utils.post('/update-profile', { name, password });
+      if (res.success) {
         CURRENT_USER.name = name;
-        Utils.showToast('Cập nhật thành công!');
+        const av = document.getElementById('avatar-btn');
+        if (av) av.textContent = name[0].toUpperCase();
+        Utils.showToast('Cập nhật thành công!', 'success');
         Modal.close();
       } else {
-        Utils.showToast('Cập nhật thất bại');
+        Utils.showToast('Cập nhật thất bại', 'error');
       }
-    } catch (e) {
-      console.error(e);
-      Utils.showToast('Lỗi kết nối server');
-    }
-  }
+    } catch { Utils.showToast('Lỗi kết nối server', 'error'); }
+  },
 };
 
-// ===== AUTH =====
+// ─────────────────────────────────────────────
+// AUTH
+// ─────────────────────────────────────────────
 const Auth = {
   async logout() {
     Navigation.closeDropdown();
     await fetch('/logout');
-    window.location.href = '/';
-  }
+    location.href = '/';
+  },
 };
 
-// ===== GLOBAL SHORTHANDS =====
+// ─────────────────────────────────────────────
+// GLOBAL SHORTHANDS  (called from HTML onclick)
+// ─────────────────────────────────────────────
 const switchPage     = p => Navigation.switchPage(p);
 const toggleDropdown = () => Navigation.toggleDropdown();
 const openManage     = t => Modal.openManage(t);
 const closeModal     = () => Modal.close();
 const doLogout       = () => Auth.logout();
-const confirmBooking = () => Booking.confirm();
 const filterBooks    = () => Books.filter();
 
-// Close dropdown on outside click
 document.addEventListener('click', e => {
   if (!e.target.closest('.nav-right')) Navigation.closeDropdown();
 });
 
-// ===== INIT =====
-document.addEventListener('DOMContentLoaded', () => {
-  LayoutRenderer.init();
-  Books.load();
+// ─────────────────────────────────────────────
+// INIT  — fetch in parallel, render once ready
+// ─────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  // Fire layout + book list + user data concurrently
+  const [, , borrows] = await Promise.allSettled([
+    LayoutRenderer.init(),                // starts its own async chain
+    Utils.fetchJSON('/get-booklist').then(d => { AppState.books = d; }),
+    Utils.fetchJSON('/my-borrows'),
+    Booking.loadMyBookings(),
+  ]);
 
-  const dateInput = document.getElementById('book-date');
-  if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+  // myBorrows must be set BEFORE first Books.render() so quota is accurate
+  if (borrows.status === 'fulfilled') AppState.myBorrows = borrows.value;
+  Books.render();
+
+  const di = document.getElementById('book-date');
+  if (di) di.value = new Date().toISOString().split('T')[0];
 });

@@ -128,24 +128,10 @@
 
       <div class="booking-panel">
         <div class="selected-info" id="selected-info">Vui lòng chọn một chỗ ngồi từ sơ đồ</div>
-        <div class="row2">
-          <div>
-            <span class="section-label">Ngày đặt</span>
-            <input type="date" class="input-field" id="book-date"/>
-          </div>
-          <div>
-            <span class="section-label">Thời gian</span>
-            <select class="input-field" id="book-time">
-              <option>08:00 – 10:00</option>
-              <option>10:00 – 12:00</option>
-              <option>13:00 – 15:00</option>
-              <option>15:00 – 17:00</option>
-              <option>17:00 – 20:00</option>
-            </select>
-          </div>
-        </div>
-        <div style="margin-top:1.25rem">
-          <button class="btn-book" onclick="confirmBooking()">Xác nhận đặt chỗ</button>
+        <div class="booking-confirm-row">
+          <button class="btn-book" onclick="confirmBooking()" id="btn-confirm-booking" disabled>
+            Xác nhận đặt chỗ
+          </button>
         </div>
       </div>
     </div>

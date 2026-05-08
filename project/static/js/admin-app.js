@@ -1,717 +1,623 @@
-// ===== STATE =====
+// ─────────────────────────────────────────────
+// STATE  — two separate namespaces to avoid
+//          canvas editor bleeding into admin UI
+// ─────────────────────────────────────────────
 const AppState = {
-  adminBooks: [],
+  adminBooks:    [],
   adminAccounts: [],
-  layoutObjects: [],
-  canvas: null,
-  ctx: null,
-
-  // Editor
-  currentShape: 'rect',
-  currentType: 'table',
-  currentTool: 'select',
-  snapGrid: 10,
-
-  // Drawing / dragging
-  isDrawing: false,
-  isDragging: false,
-  selectedObject: null,
-  startX: 0, startY: 0,
-  dragOffsetX: 0, dragOffsetY: 0,
-
-  editingBookId: null
+  editingBookId: null,
 };
 
-// ===== UTILS =====
+const CanvasState = {
+  canvas: null, ctx: null,
+  objects: [],
+  shape: 'rect', type: 'table', tool: 'select', snap: 10,
+  drawing: false, dragging: false,
+  selected: null,
+  startX: 0, startY: 0, offX: 0, offY: 0,
+  // AbortController for event cleanup
+  _ac: null,
+};
+
+// ─────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────
 const Utils = {
   showToast(msg, type = 'info') {
-    const toast = document.getElementById('toast');
-    if (!toast) return;
-    toast.textContent = msg;
-    toast.className = `toast show ${type}`;
-    clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => {
-      toast.classList.remove('show');
-      setTimeout(() => toast.className = 'toast', 300);
-    }, 3000);
+    const t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.className   = `toast show ${type}`;
+    clearTimeout(this._tid);
+    this._tid = setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.className = 'toast', 300); }, 3000);
   },
 
-  async fetchJSON(url, options = {}) {
-    const res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json' },
-      ...options
-    });
+  async fetchJSON(url, opts = {}) {
+    const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   },
 
-  debounce(fn, wait) {
+  post(url, body) {
+    return this.fetchJSON(url, { method: 'POST', body: JSON.stringify(body) });
+  },
+
+  debounce(fn, ms) {
     let t;
-    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
-  }
+    return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+  },
+
+  fmtDatetime(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleString('vi-VN', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }); }
+    catch { return iso; }
+  },
+
+  // "YYYY-MM-DD" from a Date in local time
+  isoDay: d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`,
 };
 
-// ===== AUTH =====
-const Auth = {
-  async logout() {
-    await fetch('/logout');
-    window.location.href = '/';
-  }
-};
+// ─────────────────────────────────────────────
+// AUTH / NAVIGATION
+// ─────────────────────────────────────────────
+const Auth = { async logout() { await fetch('/logout'); location.href = '/'; } };
 
-// ===== NAVIGATION =====
 const Navigation = {
   showSection(section, triggerEl) {
     document.querySelectorAll('.admin-section').forEach(s => s.classList.remove('active'));
     document.getElementById(`section-${section}`)?.classList.add('active');
-
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     triggerEl?.closest('.nav-item')?.classList.add('active');
-
-    const actions = {
-      layout:    () => setTimeout(() => Canvas.init(), 100),
-      books:     () => Books.loadList(),
-      accounts:  () => Accounts.loadList(),
-      dashboard: () => Dashboard.updateStats(),
-      schedule:  () => Schedule.load()
-    };
-    actions[section]?.();
-  }
+    ({ layout: () => setTimeout(() => Canvas.init(), 100),
+       books:   () => Books.loadList(),
+       accounts:() => Accounts.loadList(),
+       dashboard:() => Dashboard.refresh(),
+       schedule: () => Schedule.load(),
+    })[section]?.();
+  },
 };
 
-// ===== DASHBOARD =====
+// ─────────────────────────────────────────────
+// DASHBOARD
+// ─────────────────────────────────────────────
 const Dashboard = {
-  async updateStats() {
+  async refresh() {
     try {
-      const accounts = await Utils.fetchJSON('/get-accountlist');
-      document.getElementById('stat-users').textContent = accounts.length;
-      document.getElementById('stat-bookings').textContent = accounts.filter(a => a.bookings === 'Đã đặt').length;
-      document.getElementById('stat-books').textContent = accounts.filter(a => a.borrows === 'Đã mượn').length;
-    } catch (e) {
-      console.error('Stats error:', e);
-    }
-  }
+      const [accounts, schedule, books] = await Promise.all([
+        Utils.fetchJSON('/get-accountlist'),
+        Utils.fetchJSON('/get-schedule'),
+        Utils.fetchJSON('/get-booklist'),
+      ]);
+      this._set('stat-users',    accounts.length);
+      this._set('stat-bookings', schedule.filter(b => b.active).length);
+      this._set('stat-books',    books.filter(b => !b.status).length);
+      this._set('stat-seats',    CanvasState.objects.filter(o => o.type === 'seat').length || '—');
+    } catch(e) { console.error('Dashboard:', e); }
+  },
+  _set(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; },
 };
 
-// ===== CANVAS EDITOR =====
+// ─────────────────────────────────────────────
+// CANVAS EDITOR
+// ─────────────────────────────────────────────
 const Canvas = {
   async init() {
-    AppState.canvas = document.getElementById('layout-canvas');
-    if (!AppState.canvas) return;
-    AppState.ctx = AppState.canvas.getContext('2d');
-    await this.loadLayout();
+    const el = document.getElementById('layout-canvas');
+    if (!el) return;
+    // Abort previous listeners cleanly
+    CanvasState._ac?.abort();
+    CanvasState._ac = new AbortController();
+    const { signal } = CanvasState._ac;
+
+    CanvasState.canvas = el;
+    CanvasState.ctx    = el.getContext('2d');
+
+    el.addEventListener('mousedown', e => this._down(e),  { signal });
+    el.addEventListener('mousemove', e => this._move(e),  { signal });
+    el.addEventListener('mouseup',   e => this._up(e),    { signal });
+
+    await this._loadLayout();
     this.draw();
-    this._attachEvents();
-  },
-
-  _attachEvents() {
-    const c = AppState.canvas;
-    // Remove old listeners by replacing element (simple approach)
-    const clone = c.cloneNode(true);
-    c.parentNode.replaceChild(clone, c);
-    AppState.canvas = clone;
-    AppState.ctx = clone.getContext('2d');
-
-    clone.addEventListener('mousedown', e => this._onMouseDown(e));
-    clone.addEventListener('mousemove', e => this._onMouseMove(e));
-    clone.addEventListener('mouseup',   e => this._onMouseUp(e));
   },
 
   draw() {
-    const { ctx, canvas } = AppState;
+    const { ctx, canvas } = CanvasState;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    this._drawGrid();
-    this._drawObjects();
+    this._grid();
+    this._objects();
   },
 
-  _drawGrid() {
-    const { ctx, canvas, snapGrid } = AppState;
+  // ── Grid — batch all lines into two paths ─────────────────────────────────
+  _grid() {
+    const { ctx, canvas, snap } = CanvasState;
 
-    ctx.strokeStyle = '#F0F0F0';
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= canvas.width; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
-    for (let y = 0; y <= canvas.height; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+    // Major grid (40px)
+    ctx.beginPath();
+    ctx.strokeStyle = '#F0F0F0'; ctx.lineWidth = 1; ctx.setLineDash([]);
+    for (let x = 0; x <= canvas.width;  x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); }
+    for (let y = 0; y <= canvas.height; y += 40) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
+    ctx.stroke();
 
-    if (snapGrid > 1) {
-      ctx.strokeStyle = '#E8E8E8';
-      ctx.setLineDash([1, 3]);
-      for (let x = 0; x <= canvas.width; x += snapGrid) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
-      for (let y = 0; y <= canvas.height; y += snapGrid) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+    // Snap grid (dashed)
+    if (snap > 1 && snap !== 40) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#E8E8E8'; ctx.setLineDash([1, 3]);
+      for (let x = 0; x <= canvas.width;  x += snap) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); }
+      for (let y = 0; y <= canvas.height; y += snap) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
+      ctx.stroke();
       ctx.setLineDash([]);
     }
   },
 
-  _drawObjects() {
-    AppState.layoutObjects.forEach(obj => {
-      const sel = obj === AppState.selectedObject;
-      AppState.ctx.fillStyle   = obj.type === 'table' ? '#D4C9A8' : '#FFFFFF';
-      AppState.ctx.strokeStyle = sel ? '#2D5A3D' : (obj.type === 'table' ? '#A89E80' : '#6B9A7D');
-      AppState.ctx.lineWidth   = sel ? 3 : 2;
-      this._drawShape(obj);
-      this._drawLabel(obj, sel);
-      if (sel) this._drawHandles(obj);
-    });
-  },
-
-  _drawShape(obj) {
-    const { ctx } = AppState;
-    if (obj.shape === 'rect') {
-      ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
-      ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
-    } else if (obj.shape === 'circle') {
-      ctx.beginPath(); ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-    } else if (obj.shape === 'roundrect') {
-      this._roundRect(obj.x, obj.y, obj.width, obj.height, 12);
+  _objects() {
+    const { ctx, objects, selected } = CanvasState;
+    for (const obj of objects) {
+      const sel = obj === selected;
+      ctx.fillStyle   = obj.type === 'table' ? '#D4C9A8' : '#FFFFFF';
+      ctx.strokeStyle = sel ? '#2D5A3D' : obj.type === 'table' ? '#A89E80' : '#6B9A7D';
+      ctx.lineWidth   = sel ? 3 : 2;
+      this._shape(obj);
+      this._label(obj, sel);
+      if (sel) this._handles(obj);
     }
   },
 
-  _roundRect(x, y, w, h, r) {
-    const ctx = AppState.ctx;
-    ctx.beginPath();
-    ctx.moveTo(x+r, y);
-    ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
-    ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
-    ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
-    ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
-    ctx.closePath(); ctx.fill(); ctx.stroke();
+  _shape(obj) {
+    const { ctx } = CanvasState;
+    if (obj.shape === 'circle') {
+      ctx.beginPath(); ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+    } else if (obj.shape === 'roundrect') {
+      this._rrect(obj.x, obj.y, obj.width, obj.height, 12);
+    } else {
+      ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+      ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+    }
   },
 
-  _drawLabel(obj, sel) {
-    const { ctx } = AppState;
-    ctx.fillStyle = obj.type === 'table' ? '#6B6860' : '#2D5A3D';
-    ctx.font = sel ? 'bold 12px DM Sans' : '11px DM Sans';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const lx = obj.shape === 'circle' ? obj.x : obj.x + obj.width/2;
-    const ly = obj.shape === 'circle' ? obj.y : obj.y + obj.height/2;
-    ctx.fillText(obj.name, lx, ly);
+  _rrect(x, y, w, h, r) {
+    const c = CanvasState.ctx;
+    c.beginPath();
+    c.moveTo(x+r, y); c.lineTo(x+w-r, y); c.quadraticCurveTo(x+w, y, x+w, y+r);
+    c.lineTo(x+w, y+h-r); c.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+    c.lineTo(x+r, y+h); c.quadraticCurveTo(x, y+h, x, y+h-r);
+    c.lineTo(x, y+r); c.quadraticCurveTo(x, y, x+r, y);
+    c.closePath(); c.fill(); c.stroke();
   },
 
-  _drawHandles(obj) {
-    const { ctx } = AppState;
-    const s = 6;
+  _label(obj, sel) {
+    const { ctx } = CanvasState;
+    ctx.fillStyle   = obj.type === 'table' ? '#6B6860' : '#2D5A3D';
+    ctx.font        = sel ? 'bold 12px DM Sans' : '11px DM Sans';
+    ctx.textAlign   = 'center'; ctx.textBaseline = 'middle';
+    const cx = obj.shape === 'circle' ? obj.x : obj.x + obj.width  / 2;
+    const cy = obj.shape === 'circle' ? obj.y : obj.y + obj.height / 2;
+    ctx.fillText(obj.name, cx, cy);
+  },
+
+  _handles(obj) {
+    const { ctx } = CanvasState; const s = 6;
     ctx.fillStyle = '#2D5A3D';
     const pts = obj.shape === 'circle'
-      ? [[obj.x, obj.y - obj.radius],[obj.x + obj.radius, obj.y],[obj.x, obj.y + obj.radius],[obj.x - obj.radius, obj.y]]
+      ? [[obj.x, obj.y-obj.radius],[obj.x+obj.radius, obj.y],[obj.x, obj.y+obj.radius],[obj.x-obj.radius, obj.y]]
       : [[obj.x, obj.y],[obj.x+obj.width, obj.y],[obj.x, obj.y+obj.height],[obj.x+obj.width, obj.y+obj.height]];
-    pts.forEach(([hx,hy]) => ctx.fillRect(hx-s/2, hy-s/2, s, s));
+    for (const [hx, hy] of pts) ctx.fillRect(hx-s/2, hy-s/2, s, s);
   },
 
-  _snap(v) { return Math.round(v / AppState.snapGrid) * AppState.snapGrid; },
-
-  _getPos(e) {
-    const r = AppState.canvas.getBoundingClientRect();
+  // ── Interaction ────────────────────────────────────────────────────────────
+  _snap(v) { return Math.round(v / CanvasState.snap) * CanvasState.snap; },
+  _pos(e)  {
+    const r = CanvasState.canvas.getBoundingClientRect();
     return { x: this._snap(e.clientX - r.left), y: this._snap(e.clientY - r.top) };
   },
 
-  _getObjAt(x, y) {
-    const objs = AppState.layoutObjects;
-    for (let i = objs.length-1; i >= 0; i--) {
-      const o = objs[i];
-      if (o.shape === 'circle') {
-        if (Math.hypot(x-o.x, y-o.y) <= o.radius) return o;
-      } else {
-        if (x>=o.x && x<=o.x+o.width && y>=o.y && y<=o.y+o.height) return o;
-      }
+  _hit(x, y) {
+    const { objects } = CanvasState;
+    for (let i = objects.length - 1; i >= 0; i--) {
+      const o = objects[i];
+      if (o.shape === 'circle' ? Math.hypot(x-o.x, y-o.y) <= o.radius
+                               : x >= o.x && x <= o.x+o.width && y >= o.y && y <= o.y+o.height)
+        return o;
     }
     return null;
   },
 
-  _onMouseDown(e) {
-    const pos = this._getPos(e);
-    AppState.startX = pos.x; AppState.startY = pos.y;
-
-    if (AppState.currentTool === 'select') {
-      const obj = this._getObjAt(pos.x, pos.y);
-      if (obj) {
-        AppState.selectedObject = obj;
-        AppState.isDragging = true;
-        AppState.dragOffsetX = pos.x - obj.x;
-        AppState.dragOffsetY = pos.y - obj.y;
-        this.draw();
-      } else {
-        AppState.isDrawing = true;
-      }
-    } else if (AppState.currentTool === 'delete') {
-      this._deleteAt(pos.x, pos.y);
+  _down(e) {
+    const p = this._pos(e);
+    Object.assign(CanvasState, { startX: p.x, startY: p.y });
+    if (CanvasState.tool === 'select') {
+      const obj = this._hit(p.x, p.y);
+      if (obj) Object.assign(CanvasState, { selected: obj, dragging: true, offX: p.x-obj.x, offY: p.y-obj.y });
+      else     CanvasState.drawing = true;
+    } else if (CanvasState.tool === 'delete') {
+      this._del(p.x, p.y);
     }
-  },
-
-  _onMouseMove(e) {
-    const pos = this._getPos(e);
-    if (AppState.isDragging && AppState.selectedObject) {
-      AppState.selectedObject.x = pos.x - AppState.dragOffsetX;
-      AppState.selectedObject.y = pos.y - AppState.dragOffsetY;
-      this.draw(); return;
-    }
-    if (!AppState.isDrawing || AppState.currentTool === 'delete') return;
     this.draw();
-    this._drawPreview(pos);
   },
 
-  _onMouseUp(e) {
-    if (AppState.isDragging) {
-      AppState.isDragging = false;
-      this._updateList(); return;
+  _move(e) {
+    const p = this._pos(e);
+    if (CanvasState.dragging && CanvasState.selected) {
+      Object.assign(CanvasState.selected, { x: p.x - CanvasState.offX, y: p.y - CanvasState.offY });
+      this.draw();
+    } else if (CanvasState.drawing) {
+      this.draw(); this._preview(p);
     }
-    if (!AppState.isDrawing || AppState.currentTool === 'delete') {
-      AppState.isDrawing = false; this.draw(); return;
-    }
-    const pos = this._getPos(e);
-    this._createObject(pos);
-    AppState.isDrawing = false;
   },
 
-  _drawPreview(pos) {
-    const { ctx, startX, startY, currentShape } = AppState;
+  _up(e) {
+    if (CanvasState.dragging) {
+      CanvasState.dragging = false;
+      this._updateList();
+    } else if (CanvasState.drawing) {
+      CanvasState.drawing = false;
+      this._create(this._pos(e));
+    }
+  },
+
+  _preview(pos) {
+    const { ctx, startX, startY, shape } = CanvasState;
     const w = pos.x - startX, h = pos.y - startY;
-    ctx.strokeStyle = '#2D5A3D';
-    ctx.fillStyle = 'rgba(45,90,61,0.1)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]);
-
-    if (currentShape === 'rect') {
-      ctx.strokeRect(startX, startY, w, h); ctx.fillRect(startX, startY, w, h);
-    } else if (currentShape === 'circle') {
-      const r = Math.hypot(w, h)/2;
+    ctx.strokeStyle = '#2D5A3D'; ctx.fillStyle = 'rgba(45,90,61,.1)';
+    ctx.lineWidth = 2; ctx.setLineDash([5, 5]);
+    if (shape === 'circle') {
+      const r = Math.hypot(w, h) / 2;
       ctx.beginPath(); ctx.arc(startX+w/2, startY+h/2, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+    } else if (shape === 'roundrect') {
+      this._rrect(startX, startY, w, h, 12);
     } else {
-      this._roundRect(startX, startY, w, h, 12);
+      ctx.strokeRect(startX, startY, w, h); ctx.fillRect(startX, startY, w, h);
     }
-
     ctx.setLineDash([]);
-    ctx.fillStyle = '#2D5A3D';
-    ctx.font = 'bold 11px DM Sans';
+    ctx.fillStyle = '#2D5A3D'; ctx.font = 'bold 11px DM Sans'; ctx.textAlign = 'left';
     ctx.fillText(`${Math.abs(w)}×${Math.abs(h)}px`, pos.x+8, pos.y-8);
   },
 
-  _createObject(endPos) {
-    const { startX, startY, currentShape, currentType, layoutObjects, snapGrid } = AppState;
-    const w = endPos.x - startX, h = endPos.y - startY;
-    if (Math.abs(w) < snapGrid*2 || Math.abs(h) < snapGrid*2) { this.draw(); return; }
-
-    const typeLabel = currentType === 'table' ? 'Bàn' : 'Ghế';
-    const count = layoutObjects.filter(o => o.type === currentType).length + 1;
-
-    const obj = {
-      id: Date.now(), shape: currentShape, type: currentType,
-      x: Math.min(startX, endPos.x), y: Math.min(startY, endPos.y),
+  _create(end) {
+    const { startX, startY, shape, type, objects, snap } = CanvasState;
+    const w = end.x - startX, h = end.y - startY;
+    if (Math.abs(w) < snap*2 || Math.abs(h) < snap*2) return this.draw();
+    const label = type === 'table' ? 'Bàn' : 'Ghế';
+    const n     = objects.filter(o => o.type === type).length + 1;
+    const obj   = {
+      id: Date.now(), shape, type,
+      x: Math.min(startX, end.x), y: Math.min(startY, end.y),
       width: Math.abs(w), height: Math.abs(h),
-      name: `${typeLabel}-${count}`
+      name: `${label}-${n}`,
     };
-
-    if (currentShape === 'circle') {
-      obj.radius = Math.hypot(w, h)/2;
-      obj.x = startX + w/2; obj.y = startY + h/2;
-    }
-
-    AppState.layoutObjects.push(obj);
-    this.draw();
-    this._updateList();
+    if (shape === 'circle') Object.assign(obj, { radius: Math.hypot(w,h)/2, x: startX+w/2, y: startY+h/2 });
+    objects.push(obj);
+    this.draw(); this._updateList();
     Utils.showToast(`Đã thêm ${obj.name}`);
   },
 
-  _deleteAt(x, y) {
-    const obj = this._getObjAt(x, y);
+  _del(x, y) {
+    const obj = this._hit(x, y);
     if (!obj) return;
-    AppState.layoutObjects = AppState.layoutObjects.filter(o => o !== obj);
-    AppState.selectedObject = null;
+    CanvasState.objects  = CanvasState.objects.filter(o => o !== obj);
+    CanvasState.selected = null;
     this.draw(); this._updateList();
     Utils.showToast(`Đã xóa ${obj.name}`);
   },
 
+  // ── Object list panel ─────────────────────────────────────────────────────
   _updateList() {
-    const list = document.getElementById('objects-list');
-    if (!list) return;
-
-    // Cập nhật counter
+    const list    = document.getElementById('objects-list');
     const counter = document.getElementById('objects-count');
-    if (counter) counter.textContent = `${AppState.layoutObjects.length} đối tượng`;
+    if (!list) return;
+    const { objects, selected } = CanvasState;
+    if (counter) counter.textContent = `${objects.length} đối tượng`;
 
-    if (!AppState.layoutObjects.length) {
-      list.innerHTML = '<p style="color:#999;font-size:13px;padding:1rem 0;text-align:center">Chưa có đối tượng nào<br><small>Chọn hình dạng và loại, sau đó vẽ trên canvas</small></p>';
+    if (!objects.length) {
+      list.innerHTML = '<p class="obj-empty">Chưa có đối tượng nào<br><small>Chọn hình dạng và loại, sau đó vẽ trên canvas</small></p>';
       return;
     }
 
-    list.innerHTML = AppState.layoutObjects.map(obj => {
-      const sel = obj === AppState.selectedObject;
-      const shapeLabel = { rect: 'Vuông', circle: 'Tròn', roundrect: 'Bo góc' }[obj.shape] || obj.shape;
-      const sizeInfo = obj.shape === 'circle'
-        ? `⭕ r=${Math.round(obj.radius)}`
-        : `📏 ${obj.width}×${obj.height}`;
+    const SHAPE_LABEL = { rect: 'Vuông', circle: 'Tròn', roundrect: 'Bo góc' };
+    list.innerHTML = objects.map(obj => {
+      const sel      = obj === selected;
+      const sizeInfo = obj.shape === 'circle' ? `r=${Math.round(obj.radius)}` : `${obj.width}×${obj.height}`;
       return `
-        <div style="padding:10px;background:${sel?'#E8F2EB':'#f5f5f5'};border:2px solid ${sel?'#2D5A3D':'transparent'};border-radius:8px;margin-bottom:8px;cursor:pointer" onclick="Canvas.selectById(${obj.id})">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <span style="font-weight:500;font-size:13px">${obj.type==='table'?'📊':'💺'} ${obj.name}</span>
-            <button onclick="event.stopPropagation();Canvas.deleteById(${obj.id})" style="background:#FCEBEB;color:#A32D2D;border:none;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:500">Xóa</button>
+        <div class="obj-item${sel ? ' selected' : ''}" onclick="Canvas.selectById(${obj.id})">
+          <div class="obj-item-head">
+            <span class="obj-item-name">${obj.type === 'table' ? '📊' : '💺'} ${obj.name}</span>
+            <button class="obj-del-btn" onclick="event.stopPropagation();Canvas.deleteById(${obj.id})">Xóa</button>
           </div>
-          <div style="font-size:11px;color:#6B6860;display:flex;gap:12px;flex-wrap:wrap">
-            <span>📐 ${shapeLabel}</span><span>📍 (${obj.x}, ${obj.y})</span><span>${sizeInfo}</span>
+          <div class="obj-item-meta">
+            <span>${SHAPE_LABEL[obj.shape] || obj.shape}</span>
+            <span>(${obj.x}, ${obj.y})</span>
+            <span>${sizeInfo}</span>
           </div>
-          <input type="text" value="${obj.name}" onchange="Canvas.rename(${obj.id},this.value)" onclick="event.stopPropagation()"
-            style="width:33%;margin-top:6px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px" placeholder="Tên..."/>
-          <input type="text" onclick="event.stopPropagation()" style="width:33%;margin-top:6px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px" placeholder="Trigger Pin"/>
-          <input type="text" onclick="event.stopPropagation()" style="width:33%;margin-top:6px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px" placeholder="Echo Pin"/>
+          <input class="obj-name-input" type="text" value="${obj.name}" placeholder="Tên..."
+            onclick="event.stopPropagation()"
+            onchange="Canvas.rename(${obj.id}, this.value)" />
         </div>`;
     }).join('');
   },
 
+  // ── Public API ─────────────────────────────────────────────────────────────
   selectById(id) {
-    AppState.selectedObject = AppState.layoutObjects.find(o => o.id === id) || null;
+    CanvasState.selected = CanvasState.objects.find(o => o.id === id) || null;
     this.draw(); this._updateList();
   },
 
   deleteById(id) {
-    const obj = AppState.layoutObjects.find(o => o.id === id);
-    AppState.layoutObjects = AppState.layoutObjects.filter(o => o.id !== id);
-    AppState.selectedObject = null;
+    const obj = CanvasState.objects.find(o => o.id === id);
+    CanvasState.objects  = CanvasState.objects.filter(o => o.id !== id);
+    CanvasState.selected = null;
     this.draw(); this._updateList();
     if (obj) Utils.showToast(`Đã xóa ${obj.name}`);
   },
 
   rename(id, name) {
-    const obj = AppState.layoutObjects.find(o => o.id === id);
+    const obj = CanvasState.objects.find(o => o.id === id);
     if (obj) { obj.name = name.trim() || obj.name; this.draw(); }
   },
 
-  selectShape(shape) {
-    AppState.currentShape = shape;
-    document.querySelectorAll('[data-shape]').forEach(b => b.classList.remove('active'));
-    document.querySelector(`[data-shape="${shape}"]`)?.classList.add('active');
+  setShape(shape) {
+    CanvasState.shape = shape;
+    this._activateBtn('[data-shape]', `[data-shape="${shape}"]`);
   },
 
-  selectType(type) {
-    AppState.currentType = type;
-    document.querySelectorAll('[data-type]').forEach(b => b.classList.remove('active'));
-    document.querySelector(`[data-type="${type}"]`)?.classList.add('active');
+  setType(type) {
+    CanvasState.type = type;
+    this._activateBtn('[data-type]', `[data-type="${type}"]`);
   },
 
-  selectTool(tool) {
-    AppState.currentTool = tool;
-    AppState.selectedObject = null;
-    document.querySelectorAll('[data-tool]').forEach(b => b.classList.remove('active'));
-    document.querySelector(`[data-tool="${tool}"]`)?.classList.add('active');
-    if (AppState.canvas) {
-      AppState.canvas.style.cursor = { delete: 'not-allowed', select: 'default' }[tool] || 'crosshair';
-    }
+  setTool(tool) {
+    CanvasState.tool     = tool;
+    CanvasState.selected = null;
+    this._activateBtn('[data-tool]', `[data-tool="${tool}"]`);
+    if (CanvasState.canvas)
+      CanvasState.canvas.style.cursor = { delete: 'not-allowed', select: 'default' }[tool] || 'crosshair';
     this.draw();
   },
 
   updateSnap() {
-    AppState.snapGrid = parseInt(document.getElementById('snap-grid').value);
+    CanvasState.snap = parseInt(document.getElementById('snap-grid').value);
     this.draw();
-    Utils.showToast(`Snap: ${AppState.snapGrid}px`);
+    Utils.showToast(`Snap: ${CanvasState.snap}px`);
+  },
+
+  _activateBtn(allSel, activeSel) {
+    document.querySelectorAll(allSel).forEach(b => b.classList.remove('active'));
+    document.querySelector(activeSel)?.classList.add('active');
   },
 
   async save() {
-    const data = {
-      objects: AppState.layoutObjects,
-      snapGrid: AppState.snapGrid,
-      canvasSize: { width: AppState.canvas.width, height: AppState.canvas.height }
-    };
-    localStorage.setItem('libraryLayout', JSON.stringify(data));
+    const { objects, snap, canvas } = CanvasState;
     try {
-      await Utils.fetchJSON('/save-layout', { method: 'POST', body: JSON.stringify(data) });
+      await Utils.post('/save-layout', { objects, snapGrid: snap, canvasSize: { width: canvas.width, height: canvas.height } });
       Utils.showToast('Đã lưu layout!', 'success');
-    } catch (e) {
-      Utils.showToast('Lỗi khi lưu', 'error');
-    }
+      Dashboard.refresh();
+    } catch { Utils.showToast('Lỗi khi lưu', 'error'); }
   },
 
-  async loadLayout() {
-    // Ưu tiên load từ server (layout.json), fallback về localStorage
+  async _loadLayout() {
     try {
       const data = await Utils.fetchJSON('/get-layout');
-      AppState.layoutObjects = data.objects || [];
-      AppState.snapGrid = data.snapGrid || 10;
-      // Đồng bộ localStorage với dữ liệu server
-      localStorage.setItem('libraryLayout', JSON.stringify(data));
+      CanvasState.objects = data.objects || [];
+      CanvasState.snap    = data.snapGrid || 10;
       this._updateList();
-      Utils.showToast('Đã tải layout từ server', 'success');
-    } catch (e) {
-      console.warn('Không thể tải layout từ server, dùng bản cục bộ:', e);
-      try {
-        const saved = localStorage.getItem('libraryLayout');
-        if (!saved) return;
-        const data = JSON.parse(saved);
-        AppState.layoutObjects = data.objects || [];
-        AppState.snapGrid = data.snapGrid || 10;
-        this._updateList();
-        Utils.showToast('Đã tải layout từ bộ nhớ cục bộ', 'info');
-      } catch (e2) {
-        console.error('Load layout error:', e2);
-      }
-    }
-  }
+    } catch { /* no layout yet */ }
+  },
 };
 
-
-// ===== SCHEDULE =====
-// ===== SCHEDULE (Outlook-style monthly calendar) =====
+// ─────────────────────────────────────────────
+// SCHEDULE  — pre-index bookings by date for O(1) day lookup
+// ─────────────────────────────────────────────
 const Schedule = {
-  _data:        [],
-  _viewDate:    new Date(),   // first day of displayed month
-  _selectedDay: null,         // Date | null — clicked day detail
-  _detailBookings: [],        // bookings for selected day
+  _data:    [],
+  _byDay:   {},   // "YYYY-MM-DD" -> booking[]  (pre-computed)
+  _viewDate: new Date(),
 
-  /* ── public API ── */
   async load() {
     try {
       this._data = await Utils.fetchJSON('/get-schedule');
-    } catch (e) {
-      console.error('Schedule load error:', e);
+    } catch(e) {
+      console.error('Schedule load:', e);
       Utils.showToast('Lỗi tải lịch đặt', 'error');
     }
-    this._viewDate = new Date();
-    this._viewDate.setDate(1);
+    this._index();
+    this._viewDate = new Date(); this._viewDate.setDate(1);
     this._render();
   },
+
+  // Pre-build a map dateStr -> bookings[] so render is O(1) per cell
+  _index() {
+    const map = {};
+    const FAR = new Date(8_640_000_000_000_000);
+    for (const b of this._data) {
+      if (!b.start) continue;
+      const s = new Date(b.start);
+      const e = b.end ? new Date(b.end) : FAR;
+      // Walk days from s to e (max 90 days to be safe)
+      const cur = new Date(s); cur.setHours(0,0,0,0);
+      const eDateOnly = new Date(e); eDateOnly.setHours(0,0,0,0);
+      for (let i = 0; i < 90; i++) {
+        const key = Utils.isoDay(cur);
+        (map[key] = map[key] || []).push(b);
+        cur.setDate(cur.getDate() + 1);
+        if (cur > eDateOnly) break;
+      }
+    }
+    this._byDay = map;
+  },
+
+  _forDay: ds => Schedule._byDay[ds] || [],
 
   prevMonth() { this._viewDate.setMonth(this._viewDate.getMonth() - 1); this._render(); },
   nextMonth() { this._viewDate.setMonth(this._viewDate.getMonth() + 1); this._render(); },
   goToday()   { this._viewDate = new Date(); this._viewDate.setDate(1); this._render(); },
 
   openDay(dateStr) {
-    this._selectedDay = new Date(dateStr);
-    const dayStart = new Date(dateStr);
-    const dayEnd   = new Date(dateStr); dayEnd.setHours(23,59,59,999);
-    this._detailBookings = this._data.filter(b => {
-      const s = b.start ? new Date(b.start) : null;
-      const e = b.end && b.end !== '—' ? new Date(b.end) : new Date(8640000000000000);
-      return s && s <= dayEnd && e >= dayStart;
-    });
-    this._renderDetail();
-  },
-
-  async cancelBooking(id, seatName, userName) {
-    if (!confirm(`Hủy đặt chỗ "${seatName}" của "${userName}"?`)) return;
-    try {
-      const res = await Utils.fetchJSON('/cancel-booking', { method: 'POST', body: JSON.stringify({ id }) });
-      if (res.success) {
-        await this.load();
-        Utils.showToast('Đã hủy đặt chỗ!', 'success');
-      } else {
-        Utils.showToast('Lỗi khi hủy', 'error');
-      }
-    } catch (e) { console.error(e); }
-  },
-
-  /* ── helpers ── */
-  _isoDay(d) {
-    // returns "YYYY-MM-DD" in local time
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  },
-
-  _fmtTime(iso) {
-    if (!iso || iso === '—') return '—';
-    try { return new Date(iso).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
-    catch { return iso; }
-  },
-
-  _bookingsForDay(dateStr) {
-    const dayStart = new Date(dateStr);
-    const dayEnd   = new Date(dateStr); dayEnd.setHours(23,59,59,999);
-    return this._data.filter(b => {
-      const s = b.start ? new Date(b.start) : null;
-      const e = b.end && b.end !== '—' ? new Date(b.end) : new Date(8640000000000000);
-      return s && s <= dayEnd && e >= dayStart;
-    });
-  },
-
-  _eventColor(b) {
-    const active = !b.end || b.end === '—';
-    return active
-      ? { bg: 'rgba(192,57,43,.12)', border: 'rgba(192,57,43,.35)', text: '#a93226' }
-      : { bg: 'var(--green-dim)',    border: 'var(--green-border)',  text: 'var(--green)' };
-  },
-
-  /* ── RENDER MAIN ── */
-  _render() {
-    const wrap = document.getElementById('schedule-wrap');
-    if (!wrap) return;
-
-    const today     = new Date();
-    const todayStr  = this._isoDay(today);
-    const yr        = this._viewDate.getFullYear();
-    const mo        = this._viewDate.getMonth();
-    const monthName = this._viewDate.toLocaleDateString('vi-VN',{month:'long',year:'numeric'});
-
-    // Build 6-week grid (Mon–Sun)
-    const firstDay = new Date(yr, mo, 1);
-    const startDow = (firstDay.getDay() + 6) % 7; // 0=Mon
-    const gridStart = new Date(firstDay); gridStart.setDate(1 - startDow);
-    const cells = [];
-    for (let i = 0; i < 42; i++) {
-      const d = new Date(gridStart); d.setDate(gridStart.getDate() + i);
-      cells.push(d);
-    }
-
-    // Mini-calendar for sidebar
-    const miniCells = [];
-    const miniStart = new Date(firstDay); miniStart.setDate(1 - startDow);
-    for (let i = 0; i < 42; i++) {
-      const d = new Date(miniStart); d.setDate(miniStart.getDate() + i);
-      miniCells.push(d);
-    }
-
-    const weekDays = ['T2','T3','T4','T5','T6','T7','CN'];
-    const weekDaysFull = ['Thứ Hai','Thứ Ba','Thứ Tư','Thứ Năm','Thứ Sáu','Thứ Bảy','Chủ Nhật'];
-
-    // Build mini calendar HTML
-    const miniHTML = `
-      <div class="sch-mini-cal">
-        <div class="sch-mini-header">
-          <button class="sch-mini-nav" onclick="Schedule.prevMonth()">‹</button>
-          <span>${monthName}</span>
-          <button class="sch-mini-nav" onclick="Schedule.nextMonth()">›</button>
-        </div>
-        <div class="sch-mini-grid">
-          ${weekDays.map(d=>`<div class="sch-mini-dow">${d}</div>`).join('')}
-          ${miniCells.map(d => {
-            const ds = this._isoDay(d);
-            const isToday = ds === todayStr;
-            const isCurMonth = d.getMonth() === mo;
-            const hasBooking = this._bookingsForDay(ds).length > 0;
-            return `<div class="sch-mini-day ${isToday?'today':''} ${!isCurMonth?'other-month':''} ${hasBooking?'has-event':''}"
-              onclick="Schedule.openDay('${ds}')">${d.getDate()}</div>`;
-          }).join('')}
-        </div>
-      </div>`;
-
-    // Build main calendar cells
-    const cellsHTML = cells.map(d => {
-      const ds = this._isoDay(d);
-      const isToday     = ds === todayStr;
-      const isCurMonth  = d.getMonth() === mo;
-      const bookings    = this._bookingsForDay(ds);
-      const MAX_SHOW    = 3;
-      const shown       = bookings.slice(0, MAX_SHOW);
-      const extra       = bookings.length - MAX_SHOW;
-
-      const eventsHTML = shown.map(b => {
-        const c = this._eventColor(b);
-        return `<div class="sch-event" style="background:${c.bg};border-left:3px solid ${c.border};color:${c.text}"
-          onclick="event.stopPropagation();Schedule.openDay('${ds}')"
-          title="${b.seatName} — ${b.userName}">
-          <span class="sch-event-time">${b.start ? new Date(b.start).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
-          ${b.seatName}: ${b.userName}
-        </div>`;
-      }).join('');
-
-      const moreHTML = extra > 0
-        ? `<div class="sch-more" onclick="event.stopPropagation();Schedule.openDay('${ds}')">+${extra} khác</div>`
-        : '';
-
-      return `<div class="sch-cal-cell ${isToday?'today':''} ${!isCurMonth?'other-month':''}"
-        onclick="Schedule.openDay('${ds}')">
-        <div class="sch-cell-date ${isToday?'today-badge':''}">${d.getDate()}</div>
-        <div class="sch-cell-events">${eventsHTML}${moreHTML}</div>
-      </div>`;
-    }).join('');
-
-    wrap.innerHTML = `
-      <div class="sch-layout">
-
-        <!-- Sidebar -->
-        <div class="sch-sidebar">
-          ${miniHTML}
-          <!-- Legend -->
-          <div class="sch-legend">
-            <div class="sch-legend-item">
-              <span class="sch-legend-dot" style="background:rgba(192,57,43,.6)"></span>
-              <span>Đang thuê</span>
-            </div>
-            <div class="sch-legend-item">
-              <span class="sch-legend-dot" style="background:var(--green)"></span>
-              <span>Đã trả</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Main calendar -->
-        <div class="sch-main">
-          <!-- Topbar -->
-          <div class="sch-topbar">
-            <button class="sch-nav-btn" onclick="Schedule.goToday()">Hôm nay</button>
-            <button class="sch-nav-btn sch-nav-icon" onclick="Schedule.prevMonth()">‹</button>
-            <button class="sch-nav-btn sch-nav-icon" onclick="Schedule.nextMonth()">›</button>
-            <h2 class="sch-month-title">${monthName}</h2>
-            <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
-              <span style="font-size:var(--text-xs);color:var(--text-3)">${this._data.length} lượt đặt</span>
-            </div>
-          </div>
-
-          <!-- Day-of-week header -->
-          <div class="sch-dow-header">
-            ${weekDaysFull.map(d=>`<div>${d}</div>`).join('')}
-          </div>
-
-          <!-- 6-week grid -->
-          <div class="sch-cal-grid">${cellsHTML}</div>
-        </div>
-
-        <!-- Day detail panel -->
-        <div class="sch-detail-panel" id="sch-detail-panel">
-          <div class="sch-detail-placeholder">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.2">
-              <rect x="3" y="4" width="18" height="17" rx="2"/>
-              <path d="M8 2v4M16 2v4M3 10h18"/>
-            </svg>
-            <p>Chọn một ngày để xem chi tiết</p>
-          </div>
-        </div>
-
-      </div>`;
-  },
-
-  /* ── RENDER DAY DETAIL PANEL ── */
-  _renderDetail() {
+    const bs = this._forDay(dateStr);
+    const d  = new Date(dateStr);
     const panel = document.getElementById('sch-detail-panel');
     if (!panel) return;
 
-    const d = this._selectedDay;
-    const label = d.toLocaleDateString('vi-VN',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
-    const bs = this._detailBookings;
-
-    const listHTML = bs.length ? bs.map(b => {
-      const c      = this._eventColor(b);
-      const active = !b.end || b.end === '—';
-      return `<div class="sch-detail-item" style="border-left:3px solid ${c.border}">
-        <div class="sch-detail-seat">${b.seatName}</div>
-        <div class="sch-detail-user">
-          <strong>${b.userName}</strong>
-          <span>${b.email}</span>
-        </div>
-        <div class="sch-detail-times">
-          <span>▶ ${this._fmtTime(b.start)}</span>
-          <span>■ ${active ? '<em style="color:var(--danger)">Đang thuê</em>' : this._fmtTime(b.end)}</span>
-        </div>
-        ${active ? `<button class="sch-cancel-btn" onclick="Schedule.cancelBooking(${b.bookingId},'${b.seatName}','${b.userName}')">Hủy đặt</button>` : ''}
-      </div>`;
-    }).join('') : `<p style="padding:1.5rem 0;text-align:center;color:var(--text-3);font-size:var(--text-sm)">Không có đặt chỗ ngày này</p>`;
+    const label = d.toLocaleDateString('vi-VN', { weekday:'long', day:'2-digit', month:'long', year:'numeric' });
+    const items = bs.length
+      ? bs.map(b => {
+          const c = this._color(b);
+          return `<div class="sch-detail-item" style="border-left:3px solid ${c.border}">
+            <div class="sch-detail-seat">${b.seatName}</div>
+            <div class="sch-detail-user"><strong>${b.userName}</strong><span>${b.email}</span></div>
+            <div class="sch-detail-times">
+              <span>▶ ${Utils.fmtDatetime(b.start)}</span>
+              <span>■ ${b.active ? '<em style="color:var(--danger)">Đang thuê</em>' : Utils.fmtDatetime(b.end)}</span>
+            </div>
+            ${b.active ? `<button class="sch-cancel-btn" onclick="Schedule.cancelBooking(${b.bookingId},'${b.seatName}','${b.userName}')">Hủy đặt</button>` : ''}
+          </div>`;
+        }).join('')
+      : '<p style="padding:1.5rem 0;text-align:center;color:var(--text-3)">Không có đặt chỗ ngày này</p>';
 
     panel.innerHTML = `
       <div class="sch-detail-header">
         <div>
           <div class="sch-detail-title">${label}</div>
-          <div class="sch-detail-count">${bs.length} đặt chỗ</div>
+          <div class="sch-detail-count">${bs.length} đặt chỗ · ${bs.filter(b => b.active).length} đang thuê</div>
         </div>
-        <button class="sch-detail-close" onclick="document.getElementById('sch-detail-panel').innerHTML='<div class=sch-detail-placeholder><p>Chọn một ngày để xem chi tiết</p></div>'">✕</button>
+        <button class="sch-detail-close" onclick="Schedule._closeDetail()">✕</button>
       </div>
-      <div class="sch-detail-list">${listHTML}</div>`;
-  }
+      <div class="sch-detail-list">${items}</div>`;
+  },
+
+  _closeDetail() {
+    const p = document.getElementById('sch-detail-panel');
+    if (p) p.innerHTML = `<div class="sch-detail-placeholder">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.2"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
+      <p>Chọn một ngày để xem chi tiết</p></div>`;
+  },
+
+  async cancelBooking(id, seatName, userName) {
+    if (!confirm(`Hủy đặt chỗ "${seatName}" của "${userName}"?`)) return;
+    try {
+      const res = await Utils.post('/cancel-booking', { id });
+      if (res.success) { await this.load(); Utils.showToast('Đã hủy đặt chỗ!', 'success'); }
+      else Utils.showToast('Lỗi khi hủy', 'error');
+    } catch(e) { console.error(e); }
+  },
+
+  _color: b => b.active
+    ? { bg:'rgba(192,57,43,.12)', border:'rgba(192,57,43,.35)', text:'#a93226' }
+    : { bg:'var(--green-dim)',    border:'var(--green-border)',  text:'var(--green)' },
+
+  _render() {
+    const wrap = document.getElementById('schedule-wrap');
+    if (!wrap) return;
+
+    const today      = new Date();
+    const todayStr   = Utils.isoDay(today);
+    const yr         = this._viewDate.getFullYear();
+    const mo         = this._viewDate.getMonth();
+    const monthName  = this._viewDate.toLocaleDateString('vi-VN', { month:'long', year:'numeric' });
+
+    // Grid start = Monday of the week containing 1st of month
+    const firstDay  = new Date(yr, mo, 1);
+    const gridStart = new Date(firstDay);
+    gridStart.setDate(1 - ((firstDay.getDay() + 6) % 7));
+
+    // Build 42-cell date array once, shared by mini + main calendar
+    const gridDates = Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(gridStart);
+      d.setDate(gridStart.getDate() + i);
+      return d;
+    });
+
+    const DOW_SHORT = ['T2','T3','T4','T5','T6','T7','CN'];
+    const DOW_FULL  = ['Thứ Hai','Thứ Ba','Thứ Tư','Thứ Năm','Thứ Sáu','Thứ Bảy','Chủ Nhật'];
+
+    const miniCells = gridDates.map(d => {
+      const ds = Utils.isoDay(d);
+      const cls = [
+        'sch-mini-day',
+        ds === todayStr            ? 'today'       : '',
+        d.getMonth() !== mo        ? 'other-month'  : '',
+        this._forDay(ds).length    ? 'has-event'    : '',
+      ].filter(Boolean).join(' ');
+      return `<div class="${cls}" onclick="Schedule.openDay('${ds}')">${d.getDate()}</div>`;
+    }).join('');
+
+    const MAX_SHOW  = 3;
+    const mainCells = gridDates.map(d => {
+      const ds       = Utils.isoDay(d);
+      const isToday  = ds === todayStr;
+      const isCur    = d.getMonth() === mo;
+      const bs       = this._forDay(ds);
+      const shown    = bs.slice(0, MAX_SHOW);
+      const extra    = bs.length - MAX_SHOW;
+
+      const evts = shown.map(b => {
+        const c = this._color(b);
+        const t = b.start ? new Date(b.start).toLocaleTimeString('vi-VN', { hour:'2-digit', minute:'2-digit' }) : '';
+        return `<div class="sch-event" style="background:${c.bg};border-left:3px solid ${c.border};color:${c.text}"
+          onclick="event.stopPropagation();Schedule.openDay('${ds}')"
+          title="${b.seatName} — ${b.userName}">
+          <span class="sch-event-time">${t}</span>${b.seatName}: ${b.userName}
+        </div>`;
+      }).join('');
+
+      return `<div class="sch-cal-cell${isToday?' today':''}${!isCur?' other-month':''}" onclick="Schedule.openDay('${ds}')">
+        <div class="sch-cell-date${isToday?' today-badge':''}">${d.getDate()}</div>
+        <div class="sch-cell-events">${evts}${extra > 0 ? `<div class="sch-more" onclick="event.stopPropagation();Schedule.openDay('${ds}')">+${extra} khác</div>` : ''}</div>
+      </div>`;
+    }).join('');
+
+    const activeCount = this._data.filter(b => b.active).length;
+
+    wrap.innerHTML = `
+      <div class="sch-layout">
+        <div class="sch-sidebar">
+          <div class="sch-mini-cal">
+            <div class="sch-mini-header">
+              <button class="sch-mini-nav" onclick="Schedule.prevMonth()">‹</button>
+              <span>${monthName}</span>
+              <button class="sch-mini-nav" onclick="Schedule.nextMonth()">›</button>
+            </div>
+            <div class="sch-mini-grid">
+              ${DOW_SHORT.map(d => `<div class="sch-mini-dow">${d}</div>`).join('')}
+              ${miniCells}
+            </div>
+          </div>
+          <div class="sch-legend">
+            <div class="sch-legend-item"><span class="sch-legend-dot" style="background:rgba(192,57,43,.6)"></span><span>Đang thuê</span></div>
+            <div class="sch-legend-item"><span class="sch-legend-dot" style="background:var(--green)"></span><span>Đã trả</span></div>
+          </div>
+        </div>
+        <div class="sch-main">
+          <div class="sch-topbar">
+            <button class="sch-nav-btn" onclick="Schedule.goToday()">Hôm nay</button>
+            <button class="sch-nav-btn sch-nav-icon" onclick="Schedule.prevMonth()">‹</button>
+            <button class="sch-nav-btn sch-nav-icon" onclick="Schedule.nextMonth()">›</button>
+            <h2 class="sch-month-title">${monthName}</h2>
+            <div style="margin-left:auto;display:flex;gap:12px;align-items:center">
+              <span style="font-size:var(--text-xs);color:var(--text-3)">${this._data.length} lượt đặt</span>
+              <span style="font-size:var(--text-xs);color:#a93226;font-weight:500">${activeCount} đang thuê</span>
+            </div>
+          </div>
+          <div class="sch-dow-header">${DOW_FULL.map(d => `<div>${d}</div>`).join('')}</div>
+          <div class="sch-cal-grid">${mainCells}</div>
+        </div>
+        <div class="sch-detail-panel" id="sch-detail-panel">
+          <div class="sch-detail-placeholder">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.2"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
+            <p>Chọn một ngày để xem chi tiết</p>
+          </div>
+        </div>
+      </div>`;
+  },
 };
 
-
-// ===== BOOKS =====
+// ─────────────────────────────────────────────
+// BOOKS  (admin)
+// ─────────────────────────────────────────────
 const Books = {
   async loadList() {
     try {
       AppState.adminBooks = await Utils.fetchJSON('/get-booklist');
       this._render();
-    } catch (e) {
-      console.error('Load books error:', e);
-    }
+    } catch(e) { console.error('loadList:', e); }
   },
 
   _render() {
@@ -722,14 +628,29 @@ const Books = {
         <td>${b.id}</td>
         <td><strong>${b.title}</strong></td>
         <td>${b.author}</td>
-        <td><span class="badge ${b.status ? 'success' : 'danger'}">${b.status ? 'Có thể mượn' : 'Không thể mượn'}</span></td>
+        <td><span class="badge ${b.status ? 'success' : 'danger'}">${b.status ? 'Có thể mượn' : 'Đang được mượn'}</span></td>
         <td>${b.borrowedCount} lượt</td>
         <td>
-          <button class="action-btn edit" onclick="Books.edit(${b.id})">✏️ Sửa</button>
+          <button class="action-btn edit"   onclick="Books.edit(${b.id})">✏️ Sửa</button>
           <button class="action-btn delete" onclick="Books.delete(${b.id})">🗑️ Xóa</button>
         </td>
       </tr>`).join('');
   },
+
+  // Unified open/edit modal
+  _openModal(book = null) {
+    AppState.editingBookId = book?.id ?? null;
+    document.getElementById('book-modal-title').textContent = book ? 'Sửa Thông Tin Sách' : 'Thêm Sách Mới';
+    document.getElementById('book-id').value     = book?.id     ?? '';
+    document.getElementById('book-title').value  = book?.title  ?? '';
+    document.getElementById('book-author').value = book?.author ?? '';
+    document.getElementById('book-id').disabled  = !!book; // can't change ID on edit
+    document.getElementById('book-modal').classList.add('active');
+  },
+
+  openModal() { this._openModal(); },
+  edit(id)    { this._openModal(AppState.adminBooks.find(b => b.id === id)); },
+  closeModal(){ document.getElementById('book-id').disabled = false; document.getElementById('book-modal').classList.remove('active'); },
 
   filter: Utils.debounce(function() {
     const q = document.getElementById('book-search').value.toLowerCase();
@@ -738,73 +659,44 @@ const Books = {
     });
   }, 300),
 
-  openModal() {
-    AppState.editingBookId = null;
-    document.getElementById('book-modal-title').textContent = 'Thêm Sách Mới';
-    document.getElementById('book-id').value = '';
-    document.getElementById('book-title').value = '';
-    document.getElementById('book-author').value = '';
-    document.getElementById('book-modal').classList.add('active');
-  },
-
-  closeModal() {
-    document.getElementById('book-modal').classList.remove('active');
-  },
-
-  edit(id) {
-    const book = AppState.adminBooks.find(b => b.id === id);
-    if (!book) return;
-    AppState.editingBookId = id;
-    document.getElementById('book-modal-title').textContent = 'Sửa Thông Tin Sách';
-    document.getElementById('book-id').value = id;
-    document.getElementById('book-title').value = book.title;
-    document.getElementById('book-author').value = book.author;
-    document.getElementById('book-modal').classList.add('active');
-  },
-
   async delete(id) {
     if (!confirm('Bạn có chắc muốn xóa sách này?')) return;
     try {
-      const res = await Utils.fetchJSON('/delete-book', { method: 'POST', body: JSON.stringify({ id }) });
+      const res = await Utils.post('/delete-book', { id });
       if (res.success) { await this.loadList(); Utils.showToast('Đã xóa sách!', 'success'); }
       else Utils.showToast('Lỗi khi xóa', 'error');
-    } catch (e) { console.error(e); }
+    } catch(e) { console.error(e); }
   },
 
   async save() {
-    const id    = document.getElementById('book-id').value.trim();
-    const title = document.getElementById('book-title').value.trim();
+    const id     = document.getElementById('book-id').value.trim();
+    const title  = document.getElementById('book-title').value.trim();
     const author = document.getElementById('book-author').value.trim();
-
     if (!id || !title || !author) return Utils.showToast('Vui lòng điền đầy đủ', 'error');
 
     const isNew = AppState.editingBookId === null;
-    const url   = isNew ? '/add-book' : '/edit-book';
-    const data  = isNew ? { id, title, author } : { id: AppState.editingBookId, title, author };
-
+    const body  = isNew ? { id, title, author } : { id: AppState.editingBookId, title, author };
     try {
-      const res = await Utils.fetchJSON(url, { method: 'POST', body: JSON.stringify(data) });
+      const res = await Utils.post(isNew ? '/add-book' : '/edit-book', body);
       if (res.success) {
         await this.loadList();
         this.closeModal();
         Utils.showToast(isNew ? 'Đã thêm sách mới!' : 'Đã cập nhật sách!', 'success');
-      } else {
-        Utils.showToast('Lỗi khi lưu sách', 'error');
-      }
-    } catch (e) { console.error(e); }
-  }
+      } else Utils.showToast('Lỗi khi lưu sách', 'error');
+    } catch(e) { console.error(e); }
+  },
 };
 
-// ===== ACCOUNTS =====
+// ─────────────────────────────────────────────
+// ACCOUNTS  (admin)
+// ─────────────────────────────────────────────
 const Accounts = {
   async loadList() {
     try {
       AppState.adminAccounts = await Utils.fetchJSON('/get-accountlist');
       this._render();
-      Dashboard.updateStats();
-    } catch (e) {
-      console.error('Load accounts error:', e);
-    }
+      Dashboard.refresh();
+    } catch(e) { console.error('loadList:', e); }
   },
 
   _render() {
@@ -816,8 +708,8 @@ const Accounts = {
         <td><strong>${a.name}</strong></td>
         <td>${a.email}</td>
         <td>${a.created}</td>
-        <td>${a.bookings}</td>
-        <td>${a.borrows}</td>
+        <td><span class="badge ${a.bookings === 'Đã đặt' ? 'warning' : 'info'}">${a.bookings}</span></td>
+        <td><span class="badge ${a.borrows  === 'Đã mượn' ? 'warning' : 'info'}">${a.borrows}</span></td>
         <td><button class="action-btn delete" onclick="Accounts.delete(${a.id})">🗑️ Xóa</button></td>
       </tr>`).join('');
   },
@@ -832,49 +724,52 @@ const Accounts = {
   async delete(id) {
     if (!confirm('Bạn có chắc muốn xóa tài khoản này?')) return;
     try {
-      const res = await Utils.fetchJSON('/delete-account', { method: 'POST', body: JSON.stringify({ id }) });
+      const res = await Utils.post('/delete-account', { id });
       if (res.success) { await this.loadList(); Utils.showToast('Đã xóa tài khoản!', 'success'); }
       else Utils.showToast('Lỗi khi xóa', 'error');
-    } catch (e) { console.error(e); }
-  }
+    } catch(e) { console.error(e); }
+  },
 };
 
-// ===== PRICING =====
+// ─────────────────────────────────────────────
+// PRICING  (localStorage — not persisted to DB)
+// ─────────────────────────────────────────────
 const Pricing = {
+  LABELS: { morning: 'sáng', afternoon: 'chiều', evening: 'tối' },
   update(period) {
-    const val = parseInt(document.getElementById(`price-${period}`).value);
+    const val = parseInt(document.getElementById(`price-${period}`)?.value);
     if (isNaN(val) || val < 0) return Utils.showToast('Giá không hợp lệ', 'error');
     localStorage.setItem(`price-${period}`, val);
-    const labels = { morning: 'sáng', afternoon: 'chiều', evening: 'tối' };
-    Utils.showToast(`Đã cập nhật giá khung ${labels[period]}!`, 'success');
-  }
+    Utils.showToast(`Đã cập nhật giá khung ${this.LABELS[period]}!`, 'success');
+  },
 };
 
-// ===== GLOBAL BINDINGS (for HTML onclick) =====
-function showSection(section) { Navigation.showSection(section, event?.target); }
-function adminLogout()        { Auth.logout(); }
-function selectShape(s)       { Canvas.selectShape(s); }
-function selectType(t)        { Canvas.selectType(t); }
-function selectTool(t)        { Canvas.selectTool(t); }
-function updateSnapGrid()     { Canvas.updateSnap(); }
-function saveLayout()         { Canvas.save(); }
-function filterBooksAdmin()   { Books.filter(); }
-function openBookModal()      { Books.openModal(); }
-function closeBookModal()     { Books.closeModal(); }
-function saveBook()           { Books.save(); }
-function filterAccounts()     { Accounts.filter(); }
-function scheduleFilter()      { Schedule._onFilter(); }
-function scheduleClear()       { Schedule.clearFilter(); }
-function updatePrice(p)       { Pricing.update(p); }
+// ─────────────────────────────────────────────
+// GLOBAL BINDINGS  (HTML onclick)
+// ─────────────────────────────────────────────
+const showSection    = (s) => Navigation.showSection(s, event?.target);
+const adminLogout    = ()  => Auth.logout();
+const selectShape    = (s) => Canvas.setShape(s);
+const selectType     = (t) => Canvas.setType(t);
+const selectTool     = (t) => Canvas.setTool(t);
+const updateSnapGrid = ()  => Canvas.updateSnap();
+const saveLayout     = ()  => Canvas.save();
+const filterBooksAdmin = () => Books.filter();
+const openBookModal  = ()  => Books.openModal();
+const closeBookModal = ()  => Books.closeModal();
+const saveBook       = ()  => Books.save();
+const filterAccounts = ()  => Accounts.filter();
+const updatePrice    = (p) => Pricing.update(p);
 
-// Close modal on backdrop click
 document.addEventListener('click', e => {
   if (e.target.classList.contains('modal-overlay')) Books.closeModal();
 });
 
-// Init
+// ─────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  Dashboard.updateStats();
+  Dashboard.refresh();
   Books.loadList();
   Accounts.loadList();
 });
