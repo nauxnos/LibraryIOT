@@ -689,6 +689,7 @@ button { -webkit-appearance: none; }
   transform: translateY(100%);
   transition: transform .35s cubic-bezier(.32,0,.15,1);
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+  pointer-events: auto;
 }
 .stm-modal.open { transform: translateY(0); }
 
@@ -1692,6 +1693,7 @@ button { -webkit-appearance: none; }
   transform: translateY(40px);
   transition: transform .3s cubic-bezier(.4,0,.2,1);
   overscroll-behavior: contain;
+  pointer-events: auto;
 }
 .bpop-overlay.open .bpop-modal { transform: translateY(0); }
 
@@ -1900,3 +1902,12 @@ button { -webkit-appearance: none; }
 }
 .bpop-btn-confirm:active { transform: scale(.98); }
 .bpop-btn-confirm:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+
+.stm-cell.selecting-start {
+  background: var(--gold, #C8A96E);
+  animation: stm-pulse-start .9s ease-in-out infinite alternate;
+}
+@keyframes stm-pulse-start {
+  from { opacity: 1; }
+  to   { opacity: .55; }
+}

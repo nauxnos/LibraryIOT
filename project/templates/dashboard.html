@@ -8,19 +8,10 @@
   <title>Thư Viện Số</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <style>
-    /* Layout container for div-based rendering */
-    .layout-wrapper {
-      overflow: auto;
-      padding: 1rem 0;
-    }
-    #layout-container {
-      margin: 0 auto;
-    }
-    /* Seat/Table elements rendered by JS will use inline styles,
-       but hover/transition effects are handled via JS event listeners */
+    .layout-wrapper { overflow: auto; padding: 1rem 0; }
+    #layout-container { margin: 0 auto; }
   </style>
 </head>
-
 <body>
 
 <div id="screen-main" class="screen active">
@@ -99,18 +90,14 @@
     <div class="page-content active" id="page-seat">
       <div class="page-hero">
         <h2>Đặt chỗ ngồi</h2>
-        <p>Chọn vị trí yêu thích và đặt chỗ trước khi đến thư viện</p>
+        <p>Chọn ghế trên sơ đồ và xác nhận đặt chỗ ngay trong popup</p>
       </div>
 
       <div class="floor-map">
         <div class="floor-label">Khu đọc sách yên tĩnh</div>
-
-        <!-- DIV-based layout (replaces canvas) -->
         <div class="layout-wrapper">
           <div id="layout-container"></div>
         </div>
-
-        <!-- Legend -->
         <div class="seat-legend" style="margin-top:1rem">
           <div class="legend-row">
             <div style="display:flex;align-items:center;gap:6px">
@@ -123,15 +110,6 @@
               <div class="legend-dot sel"></div><span>Đang chọn</span>
             </div>
           </div>
-        </div>
-      </div>
-
-      <div class="booking-panel">
-        <div class="selected-info" id="selected-info">Vui lòng chọn một chỗ ngồi từ sơ đồ</div>
-        <div class="booking-confirm-row">
-          <button class="btn-book" onclick="confirmBooking()" id="btn-confirm-booking" disabled>
-            Xác nhận đặt chỗ
-          </button>
         </div>
       </div>
     </div>
@@ -151,7 +129,7 @@
 
   </div>
 
-  <!-- iOS Bottom Tab Bar (mobile only, hidden on desktop via CSS) -->
+  <!-- iOS Bottom Tab Bar -->
   <nav class="tab-bar" id="tab-bar">
     <button class="tab-bar-item active" id="tab-seat" onclick="switchPage('seat')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">

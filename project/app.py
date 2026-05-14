@@ -272,6 +272,7 @@ def book_seat():
         end_time   = f"{date_str}T{str(hours_sorted[-1]+1).zfill(2)}:00:00"
         if dbHandler.hasSeatConflict(seat_id, start_time, end_time):
             return jsonify({"success": False, "error": "TimeConflict"})
+        print(f"Attempting to book seat {seat_id} for user {user_id} from {start_time} to {end_time}")
         if dbHandler.createSeatBooking(user_id, seat_id, start_time, end_time):
             return jsonify({"success": True, "start": start_time, "end": end_time})
         return jsonify({"success": False, "error": "BookingFailed"})

@@ -57,7 +57,8 @@ const Utils = {
     return m ? `${h}h ${m}p` : `${h} giờ`;
   },
 
-  // Create a bottom-sheet pair {overlay, modal} and attach backdrop-close
+  // Create a bottom-sheet: modal is appended INSIDE overlay
+  // so CSS child selectors (.overlay.open .modal) work correctly
   createSheet(overlayClass, modalClass, onClose) {
     const overlay = document.createElement('div');
     overlay.className = overlayClass;
@@ -66,7 +67,8 @@ const Utils = {
     const modal = document.createElement('div');
     modal.className = modalClass;
 
-    document.body.append(overlay, modal);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
     return { overlay, modal };
   },
 
@@ -79,10 +81,11 @@ const Utils = {
   },
 
   // Animate a sheet pair out and remove after transition
+  // modal is a child of overlay, so removing overlay removes modal too
   closeSheet(overlay, modal, delay = 300) {
     overlay.classList.remove('open');
     modal.classList.remove('open');
-    setTimeout(() => { overlay.remove(); modal.remove(); }, delay);
+    setTimeout(() => overlay.remove(), delay);
   },
 };
 
@@ -352,40 +355,50 @@ const SeatTooltip = {
 // SEAT BOOKING POPUP  (timeline picker)
 // ─────────────────────────────────────────────
 const SeatPopup = {
-  _s: null,  // state
+  _s: null,
   H0: 7, H1: 22,
 
   async show(obj, el) {
     this._close();
     const today = new Date().toISOString().split('T')[0];
-
-    // Reuse SeatTooltip cache if available, otherwise fetch
     let allSlots = [];
-    try { allSlots = await SeatTooltip._fetch(obj.id); } catch { /* ignore */ }
-
+    try { allSlots = await SeatTooltip._fetch(obj.id); } catch { }
     const { overlay, modal } = Utils.createSheet('stm-overlay', 'stm-modal', () => this._close());
-    this._s = { modal, overlay, obj, el, selectedDate: today, sel: new Set(), allSlots };
+    // start/end model: null = not set
+    this._s = { modal, overlay, obj, el, selectedDate: today, start: null, end: null, allSlots };
     this._paint();
     Utils.openSheet(overlay, modal);
   },
 
   _paint() {
-    const { modal, obj, selectedDate, sel, allSlots } = this._s;
+    const { modal, obj, selectedDate, start, end, allSlots } = this._s;
     const booked = this._bookedHours(allSlots, selectedDate);
-    const sorted = [...sel].sort((a, b) => a - b);
-    const range  = this.HOUR_END - this.HOUR_START;
-    const selTxt = sorted.length
-      ? `${this._hh(sorted[0])}:00 – ${this._hh(sorted[sorted.length - 1] + 1)}:00`
-      : 'Chưa chọn giờ';
 
-    // Build ruler ticks once
+    // Summary texts
+    let selTxt, durTxt, btnDisabled;
+    if (start === null) {
+      selTxt = 'Chọn giờ bắt đầu'; durTxt = '—'; btnDisabled = true;
+    } else if (end === null) {
+      selTxt = `Từ ${this._hh(start)}:00 — chọn giờ kết thúc`; durTxt = '—'; btnDisabled = true;
+    } else {
+      selTxt = `${this._hh(start)}:00 – ${this._hh(end + 1)}:00`;
+      durTxt = `${end - start + 1} giờ`;
+      btnDisabled = false;
+    }
+
+    // Ruler ticks
     const ticks = Array.from({ length: this.H1 - this.H0 + 1 }, (_, i) =>
       `<div class="stm-ruler-tick">${this._hh(this.H0 + i)}:00</div>`).join('');
 
-    // Build cells
+    // Cells
+    const selHours = new Set(this._selectedHours());
     const cells = Array.from({ length: this.H1 - this.H0 }, (_, i) => {
-      const h   = this.H0 + i;
-      const cls = booked.has(h) ? 'booked' : sel.has(h) ? 'selected' : 'free';
+      const h = this.H0 + i;
+      let cls;
+      if (booked.has(h))                                  cls = 'booked';
+      else if (h === start && end === null)               cls = 'selecting-start';
+      else if (selHours.has(h))                           cls = 'selected';
+      else                                                cls = 'free';
       return `<div class="stm-cell ${cls}" data-hour="${h}" onclick="SeatPopup._click(${h})"></div>`;
     }).join('');
 
@@ -420,22 +433,31 @@ const SeatPopup = {
           <span class="stm-summary-label">Thời gian chọn</span>
           <span class="stm-summary-val" id="stm-sel-text">${selTxt}</span>
         </div>
-        <div class="stm-summary-dur"><span id="stm-dur-text">${sorted.length} giờ</span></div>
+        <div class="stm-summary-dur"><span id="stm-dur-text">${durTxt}</span></div>
       </div>
       <div class="stm-footer">
-        <button class="stm-btn-confirm" onclick="SeatPopup._confirm()" ${sel.size ? '' : 'disabled'}>
+        <button class="stm-btn-confirm" onclick="SeatPopup._confirm()" ${btnDisabled ? 'disabled' : ''}>
           XÁC NHẬN ĐẶT CHỖ
         </button>
       </div>`;
   },
 
-  // Build set of booked hours for a date — called once per paint/click
+  // Hours in [start, start+1, ..., end]
+  _selectedHours() {
+    const { start, end } = this._s;
+    if (start === null) return [];
+    if (end === null)   return [start];
+    const hrs = [];
+    for (let h = start; h <= end; h++) hrs.push(h);
+    return hrs;
+  },
+
+  // Booked hour set for a date
   _bookedHours(slots, dateStr) {
     const booked = new Set();
     const dStart = new Date(dateStr + 'T00:00:00');
     const dEnd   = new Date(dateStr + 'T23:59:59');
     const FAR    = new Date(8_640_000_000_000_000);
-
     for (const s of slots) {
       if (!s.start) continue;
       const sS = new Date(s.start);
@@ -450,47 +472,87 @@ const SeatPopup = {
     return booked;
   },
 
+  // Flight-style click: 1st click = start, 2nd click = end, 3rd click = reset
   _click(h) {
-    const { sel, allSlots, selectedDate } = this._s;
-    if (this._bookedHours(allSlots, selectedDate).has(h)) return;
+    const { allSlots, selectedDate } = this._s;
+    const booked = this._bookedHours(allSlots, selectedDate);
+    if (booked.has(h)) return;
 
-    if (sel.has(h)) {
-      const sorted = [...sel].sort((a, b) => a - b);
-      if (h === sorted[0] || h === sorted[sorted.length - 1]) sel.delete(h);
-      else { this._hint('Chỉ có thể bỏ chọn ô đầu hoặc cuối'); return; }
+    const { start, end } = this._s;
+
+    if (start === null) {
+      // No selection → set start
+      this._s.start = h;
+      this._s.end   = null;
+
+    } else if (end === null) {
+      // Have start, waiting for end
+      if (h === start) {
+        // Clicked same → reset
+        this._s.start = null;
+      } else if (h < start) {
+        // Before start → treat as new start, reset end
+        this._s.start = h;
+      } else {
+        // After start → validate range has no booked cells
+        let blocked = false;
+        for (let hh = start; hh <= h; hh++) {
+          if (booked.has(hh)) { blocked = true; break; }
+        }
+        if (blocked) {
+          this._hint('Khoảng giờ này có chỗ đã được đặt');
+          return;
+        }
+        this._s.end = h;
+      }
+
     } else {
-      sel.add(h);
+      // Already complete → restart with new start
+      this._s.start = h;
+      this._s.end   = null;
     }
+
     this._refreshTimeline();
   },
 
-  // Update cells + summary without full re-render
+  // Partial update: cells + summary
   _refreshTimeline() {
-    const { sel, allSlots, selectedDate } = this._s;
+    const { allSlots, selectedDate, start, end } = this._s;
     const booked  = this._bookedHours(allSlots, selectedDate);
-    const sorted  = [...sel].sort((a, b) => a - b);
+    const selHours = new Set(this._selectedHours());
 
     document.getElementById('stm-cells')?.querySelectorAll('.stm-cell').forEach(cell => {
       const h = +cell.dataset.hour;
-      cell.className = `stm-cell ${booked.has(h) ? 'booked' : sel.has(h) ? 'selected' : 'free'}`;
+      let cls;
+      if (booked.has(h))                  cls = 'booked';
+      else if (h === start && end === null) cls = 'selecting-start';
+      else if (selHours.has(h))           cls = 'selected';
+      else                                cls = 'free';
+      cell.className = `stm-cell ${cls}`;
     });
 
-    const selTxt = sorted.length
-      ? `${this._hh(sorted[0])}:00 – ${this._hh(sorted[sorted.length - 1] + 1)}:00`
-      : 'Chưa chọn giờ';
+    let selTxt, durTxt;
+    if (start === null) {
+      selTxt = 'Chọn giờ bắt đầu'; durTxt = '—';
+    } else if (end === null) {
+      selTxt = `Từ ${this._hh(start)}:00 — chọn giờ kết thúc`; durTxt = '—';
+    } else {
+      selTxt = `${this._hh(start)}:00 – ${this._hh(end + 1)}:00`;
+      durTxt = `${end - start + 1} giờ`;
+    }
+
     const selEl = document.getElementById('stm-sel-text');
     if (selEl) selEl.textContent = selTxt;
     const durEl = document.getElementById('stm-dur-text');
-    if (durEl) durEl.textContent = `${sorted.length} giờ`;
+    if (durEl) durEl.textContent = durTxt;
     const btn = document.querySelector('.stm-btn-confirm');
-    if (btn) btn.disabled = !sorted.length;
+    if (btn) btn.disabled = start === null || end === null;
   },
 
   _hint(msg) {
     if (document.getElementById('stm-hint')) return;
     const el = document.createElement('div');
-    el.id        = 'stm-hint';
-    el.className = 'stm-hint-toast';
+    el.id = 'stm-hint'; el.className = 'stm-hint-toast';
     el.textContent = msg;
     this._s.modal.style.position = 'relative';
     this._s.modal.appendChild(el);
@@ -500,29 +562,28 @@ const SeatPopup = {
 
   _changeDate(date) {
     this._s.selectedDate = date;
-    this._s.sel          = new Set();
+    this._s.start = null;
+    this._s.end   = null;
     this._paint();
   },
 
   async _confirm() {
-    const { obj, el, selectedDate, sel } = this._s;
-    if (!sel.size) return;
+    const { obj, el, selectedDate, start, end } = this._s;
+    if (start === null || end === null) return;
 
-    const sorted  = [...sel].sort((a, b) => a - b);
-    const timeStr = `${this._hh(sorted[0])}:00 – ${this._hh(sorted[sorted.length - 1] + 1)}:00`;
+    const sorted  = this._selectedHours();
+    const timeStr = `${this._hh(start)}:00 – ${this._hh(end + 1)}:00`;
     const btn     = document.querySelector('.stm-btn-confirm');
     if (btn) { btn.disabled = true; btn.textContent = 'Đang đặt...'; }
 
     try {
       const res = await Utils.post('/book-seat', { seatId: obj.id, date: selectedDate, hours: sorted });
       if (res.success) {
-        const info = document.getElementById('selected-info');
-        if (info) info.textContent = `${obj.name} — ${selectedDate.split('-').reverse().join('/')} · ${timeStr}`;
         LayoutRenderer.selectSeat(el, obj);
         SeatTooltip.invalidate(obj.id);
         this._close();
         Utils.showToast(`Đã đặt ${obj.name} · ${timeStr}`, 'success');
-        Booking.loadMyBookings(); // no await — fire-and-forget
+        Booking.loadMyBookings();
       } else {
         const msgs = {
           TimeConflict:  'Thời gian đã bị đặt, vui lòng chọn giờ khác',
@@ -548,9 +609,6 @@ const SeatPopup = {
   _hh: h => String(h).padStart(2, '0'),
 };
 
-// ─────────────────────────────────────────────
-// BOOKING  (my-bookings CRUD)
-// ─────────────────────────────────────────────
 const Booking = {
   async loadMyBookings() {
     try { AppState.myBookings = await Utils.fetchJSON('/my-bookings'); }
@@ -1070,6 +1128,4 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (borrows.status === 'fulfilled') AppState.myBorrows = borrows.value;
   Books.render();
 
-  const di = document.getElementById('book-date');
-  if (di) di.value = new Date().toISOString().split('T')[0];
 });
