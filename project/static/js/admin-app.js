@@ -81,19 +81,90 @@ const Navigation = {
 // DASHBOARD
 // ─────────────────────────────────────────────
 const Dashboard = {
+  _log: [],
+  _filter: 'all',   // 'all' | 'seat' | 'book'
+
   async refresh() {
     try {
-      const [accounts, schedule, books] = await Promise.all([
+      const [accounts, schedule, books, log] = await Promise.all([
         Utils.fetchJSON('/get-accountlist'),
         Utils.fetchJSON('/get-schedule'),
         Utils.fetchJSON('/get-booklist'),
+        Utils.fetchJSON('/get-activity-log'),
       ]);
+      // Stats
       this._set('stat-users',    accounts.length);
       this._set('stat-bookings', schedule.filter(b => b.active).length);
       this._set('stat-books',    books.filter(b => !b.status).length);
       this._set('stat-seats',    CanvasState.objects.filter(o => o.type === 'seat').length || '—');
+      // Activity log
+      this._log = log;
+      this._renderLog();
     } catch(e) { console.error('Dashboard:', e); }
   },
+
+  setFilter(f) {
+    this._filter = f;
+    document.querySelectorAll('.act-filter-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.filter === f));
+    this._renderLog();
+  },
+
+  _renderLog() {
+    const el = document.getElementById('activity-log-list');
+    if (!el) return;
+
+    const events = this._filter === 'all' ? this._log
+      : this._log.filter(e => e.type.startsWith(this._filter === 'seat' ? 'seat' : 'book'));
+
+    if (!events.length) {
+      el.innerHTML = '<div class="act-empty">Chưa có hoạt động nào</div>';
+      return;
+    }
+
+    el.innerHTML = events.map(e => {
+      const cfg = this._cfg(e.type);
+      const timeStr = e.time
+        ? new Date(e.time).toLocaleString('vi-VN', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })
+        : '—';
+
+      const badge = e.active
+        ? `<span class="act-badge act-badge-live">${e.type === 'seat_book' ? 'Đang dùng' : 'Đang mượn'}</span>`
+        : e.overdue
+        ? `<span class="act-badge act-badge-overdue">Quá hạn</span>`
+        : `<span class="act-badge act-badge-done">${e.type === 'book_borrow' ? 'Đã trả' : 'Xong'}</span>`;
+
+      return `<div class="act-item act-${e.type}${e.overdue ? ' act-overdue' : ''}">
+        <div class="act-icon-wrap">
+          <div class="act-icon">${cfg.icon}</div>
+          <div class="act-line"></div>
+        </div>
+        <div class="act-body">
+          <div class="act-row-top">
+            <div class="act-meta">
+              <span class="act-user">${e.userName}</span>
+              <span class="act-email">${e.email}</span>
+            </div>
+            ${badge}
+          </div>
+          <div class="act-action">${cfg.verb} <strong>${e.detail}</strong></div>
+          <div class="act-row-bot">
+            <span class="act-sub">${e.subDetail}</span>
+            <span class="act-time">${timeStr}</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  },
+
+  _cfg(type) {
+    return {
+      seat_book:    { icon: '💺', verb: 'Đặt chỗ' },
+      book_borrow:  { icon: '📖', verb: 'Mượn sách' },
+      seat_return:  { icon: '✅', verb: 'Trả sách' },
+    }[type] || { icon: '📋', verb: 'Hoạt động' };
+  },
+
   _set(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; },
 };
 
@@ -317,6 +388,46 @@ const Canvas = {
     list.innerHTML = objects.map(obj => {
       const sel      = obj === selected;
       const sizeInfo = obj.shape === 'circle' ? `r=${Math.round(obj.radius)}` : `${obj.width}×${obj.height}`;
+      const gpioFields = obj.type === 'seat' ? `
+        <div class="obj-gpio-section">
+          <div class="obj-gpio-label">
+            <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg>
+            GPIO (HC-SR04)
+          </div>
+          <div class="obj-gpio-row">
+            <div class="obj-gpio-field">
+              <label>TRIG</label>
+              <input type="number" class="obj-gpio-input" placeholder="pin"
+                value="${obj.gpio_trig ?? ''}" min="1" max="40"
+                onclick="event.stopPropagation()"
+                onchange="Canvas.setGpio(${obj.id}, 'trig', this.value)" />
+            </div>
+            <div class="obj-gpio-field">
+              <label>ECHO</label>
+              <input type="number" class="obj-gpio-input" placeholder="pin"
+                value="${obj.gpio_echo ?? ''}" min="1" max="40"
+                onclick="event.stopPropagation()"
+                onchange="Canvas.setGpio(${obj.id}, 'echo', this.value)" />
+            </div>
+            <div class="obj-gpio-field">
+              <label>LED</label>
+              <input type="number" class="obj-gpio-input" placeholder="pin"
+                value="${obj.gpio_led ?? ''}" min="1" max="40"
+                onclick="event.stopPropagation()"
+                onchange="Canvas.setGpio(${obj.id}, 'led', this.value)" />
+            </div>
+          </div>
+          <div class="obj-gpio-thresh-row">
+            <label class="obj-gpio-thresh-label">
+              Ngưỡng phát hiện
+              <span>Khoảng cách tối đa (cm)</span>
+            </label>
+            <input type="number" class="obj-gpio-input obj-gpio-thresh" placeholder="50"
+              value="${obj.gpio_threshold ?? 50}" min="5" max="200"
+              onclick="event.stopPropagation()"
+              onchange="Canvas.setGpio(${obj.id}, 'threshold', this.value)" />
+          </div>
+        </div>` : '';
       return `
         <div class="obj-item${sel ? ' selected' : ''}" onclick="Canvas.selectById(${obj.id})">
           <div class="obj-item-head">
@@ -331,6 +442,7 @@ const Canvas = {
           <input class="obj-name-input" type="text" value="${obj.name}" placeholder="Tên..."
             onclick="event.stopPropagation()"
             onchange="Canvas.rename(${obj.id}, this.value)" />
+          ${gpioFields}
         </div>`;
     }).join('');
   },
@@ -352,6 +464,13 @@ const Canvas = {
   rename(id, name) {
     const obj = CanvasState.objects.find(o => o.id === id);
     if (obj) { obj.name = name.trim() || obj.name; this.draw(); }
+  },
+
+  setGpio(id, field, value) {
+    const obj = CanvasState.objects.find(o => o.id === id);
+    if (!obj || obj.type !== 'seat') return;
+    const num = parseInt(value);
+    obj[`gpio_${field}`] = isNaN(num) ? undefined : num;
   },
 
   setShape(shape) {

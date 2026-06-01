@@ -16,6 +16,10 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 dbHandler = DatabaseHandler("database/library.db")
 
+# ── IoT Sensor Presence State ──────────────────────────────────────────────
+# { seat_id (int): {"occupied": bool, "distance": float, "updated_at": str} }
+presence_state = {}
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -272,7 +276,6 @@ def book_seat():
         end_time   = f"{date_str}T{str(hours_sorted[-1]+1).zfill(2)}:00:00"
         if dbHandler.hasSeatConflict(seat_id, start_time, end_time):
             return jsonify({"success": False, "error": "TimeConflict"})
-        print(f"Attempting to book seat {seat_id} for user {user_id} from {start_time} to {end_time}")
         if dbHandler.createSeatBooking(user_id, seat_id, start_time, end_time):
             return jsonify({"success": True, "start": start_time, "end": end_time})
         return jsonify({"success": False, "error": "BookingFailed"})
@@ -368,6 +371,76 @@ def my_borrows():
             return jsonify([])
         return jsonify(dbHandler.getUserBorrowsDetail(user_id))
     except Exception as e:
+        return jsonify({"error": "ServerError"}), 500
+
+
+# ===== PWA ROUTES =====
+
+@app.route("/manifest.json")
+def manifest():
+    return app.send_static_file("manifest.json")
+
+@app.route("/service-worker.js")
+def service_worker():
+    from flask import make_response
+    resp = make_response(app.send_static_file("service-worker.js"))
+    resp.headers["Service-Worker-Allowed"] = "/"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+@app.route("/offline")
+def offline():
+    return render_template("offline.html")
+
+
+@app.route("/get-seat-presence")
+@login_required
+def get_seat_presence():
+    """Return current sensor presence for all seats. Used by frontend polling."""
+    return jsonify(presence_state)
+
+
+@app.route("/get-activity-log")
+@admin_required
+def get_activity_log():
+    """Merge seat bookings + book borrows into unified activity timeline for admin dashboard."""
+    try:
+        bookings = dbHandler.getAllSeatBookings()
+        borrows  = dbHandler.getAllBorrows()
+
+        events = []
+
+        for b in bookings:
+            events.append({
+                "type":      "seat_book",
+                "time":      b["start"],
+                "userName":  b["userName"],
+                "email":     b["email"],
+                "detail":    b["seatName"],
+                "subDetail": f"{b['start'][11:16]} – {b['end'][11:16] if b['end'] else '?'}",
+                "active":    b["active"],
+                "id":        b["bookingId"],
+            })
+
+        for bw in borrows:
+            action = "seat_return" if bw["returnedAt"] else "book_borrow"
+            events.append({
+                "type":      action,
+                "time":      bw["returnedAt"] if bw["returnedAt"] else bw["borrowedAt"],
+                "userName":  bw["userName"],
+                "email":     bw["email"],
+                "detail":    bw["title"],
+                "subDetail": f"Hạn trả: {bw['due']}" if not bw["returnedAt"] else f"Trả lúc {bw['returnedAt'][11:16]}",
+                "active":    bw["active"],
+                "overdue":   bw.get("overdue", False),
+                "id":        bw["borrowId"],
+            })
+
+        # Sort by time desc
+        events.sort(key=lambda e: e["time"] or "", reverse=True)
+        return jsonify(events[:200])   # cap at 200 most recent
+    except Exception as e:
+        print(f"get-activity-log error: {e}")
         return jsonify({"error": "ServerError"}), 500
 
 @app.errorhandler(404)

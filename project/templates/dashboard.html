@@ -7,6 +7,13 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>Thư Viện Số</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#2D5A3D">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Thư Viện">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
   <style>
     .layout-wrapper { overflow: auto; padding: 1rem 0; }
     #layout-container { margin: 0 auto; }
@@ -104,7 +111,10 @@
               <div class="legend-dot avail"></div><span>Còn trống</span>
             </div>
             <div style="display:flex;align-items:center;gap:6px">
-              <div class="legend-dot taken"></div><span>Đã đặt</span>
+              <div class="legend-dot taken"></div><span>Đã đặt lịch</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div class="legend-dot sensor"></div><span>Đang có người</span>
             </div>
             <div style="display:flex;align-items:center;gap:6px">
               <div class="legend-dot sel"></div><span>Đang chọn</span>
@@ -174,5 +184,15 @@
 <script>
   const CURRENT_USER = {{ user | tojson }};
 </script>
+  <!-- Register Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/service-worker.js')
+          .then(r => console.log('SW registered'))
+          .catch(e => console.log('SW failed:', e));
+      });
+    }
+  </script>
 </body>
 </html>

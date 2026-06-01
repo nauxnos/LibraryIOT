@@ -426,6 +426,52 @@ class DatabaseHandler:
                 })
             return result
 
+    def getAllBorrows(self) -> List[Dict[str, Any]]:
+        """Get all borrow records with user + book info — for admin activity log"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    bm.BookBorrowID,
+                    u.UserID,
+                    u.UserName,
+                    u.Email,
+                    b.BookID,
+                    b.BookName,
+                    b.Author,
+                    bm.StartTime,
+                    bm.EndTime,
+                    bm.ReturnedAt
+                FROM BookManager bm
+                JOIN User u ON bm.UserID = u.UserID
+                JOIN Book b ON bm.BookID = b.BookID
+                ORDER BY bm.StartTime DESC
+            """)
+            now = datetime.now()
+            result = []
+            for row in cursor.fetchall():
+                try:
+                    due_dt  = datetime.fromisoformat(row[8])
+                    overdue = row[9] is None and due_dt < now
+                    due_str = due_dt.strftime("%d/%m/%Y")
+                except Exception:
+                    overdue, due_str = False, "—"
+                result.append({
+                    "borrowId":   row[0],
+                    "userId":     row[1],
+                    "userName":   row[2],
+                    "email":      row[3],
+                    "bookId":     row[4],
+                    "title":      row[5],
+                    "author":     row[6],
+                    "borrowedAt": row[7],
+                    "due":        due_str,
+                    "returnedAt": row[9],
+                    "active":     row[9] is None,
+                    "overdue":    overdue,
+                })
+            return result
+
+
     # ===== HELPERS =====
 
     def _load_seat_names(self) -> Dict[int, str]:
