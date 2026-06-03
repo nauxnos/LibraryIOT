@@ -443,6 +443,157 @@ def get_activity_log():
         print(f"get-activity-log error: {e}")
         return jsonify({"error": "ServerError"}), 500
 
+
+# ===== SEAT-BOOK LINK =====
+
+@app.route("/get-seat-user-info")
+@admin_required
+def get_seat_user_info():
+    """Admin: xem user + sách đang mượn tại một ghế cụ thể."""
+    try:
+        seat_id = request.args.get("seat_id", type=int)
+        if not seat_id:
+            return jsonify({"error": "MissingSeatID"}), 400
+        info = dbHandler.getSeatUserInfo(seat_id)
+        return jsonify(info)
+    except Exception as e:
+        print(f"get-seat-user-info error: {e}")
+        return jsonify({"error": "ServerError"}), 500
+
+# ===== BOOK RATING =====
+
+@app.route("/rate-book", methods=["POST"])
+@login_required
+def rate_book():
+    try:
+        data    = request.get_json()
+        book_id = data.get("bookId")
+        stars   = int(data.get("stars", 0))
+        comment = data.get("comment", "").strip()
+        if not book_id or stars < 1 or stars > 5:
+            return jsonify({"success": False, "error": "InvalidInput"})
+        user_id = dbHandler.getUserIdByEmail(session["user"]["email"])
+        if dbHandler.createRating(user_id, book_id, stars, comment):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "RatingFailed"})
+    except Exception as e:
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
+@app.route("/get-book-ratings")
+@login_required
+def get_book_ratings():
+    try:
+        book_id = request.args.get("book_id", type=int)
+        if not book_id:
+            return jsonify({"error": "MissingBookID"}), 400
+        data = dbHandler.getBookRatings(book_id)
+        # Also attach current user's rating if any
+        user_id = dbHandler.getUserIdByEmail(session["user"]["email"])
+        data["myRating"] = dbHandler.getUserRating(user_id, book_id)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": "ServerError"}), 500
+
+@app.route("/get-top-rated")
+@admin_required
+def get_top_rated():
+    try:
+        period = request.args.get("period", "month")
+        return jsonify(dbHandler.getTopRatedBooks(period))
+    except Exception as e:
+        return jsonify({"error": "ServerError"}), 500
+
+# ===== CATEGORY =====
+
+@app.route("/get-categories")
+@login_required
+def get_categories():
+    try:
+        return jsonify(dbHandler.getAllCategories())
+    except Exception as e:
+        return jsonify({"error": "ServerError"}), 500
+
+@app.route("/add-category", methods=["POST"])
+@admin_required
+def add_category():
+    try:
+        data = request.get_json()
+        name = data.get("name", "").strip()
+        desc = data.get("description", "").strip()
+        if not name:
+            return jsonify({"success": False, "error": "MissingName"})
+        if dbHandler.insertCategory(name, desc):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "CategoryExists"})
+    except Exception as e:
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
+@app.route("/delete-category", methods=["POST"])
+@admin_required
+def delete_category():
+    try:
+        cat_id = request.get_json().get("id")
+        if not cat_id:
+            return jsonify({"success": False, "error": "MissingID"})
+        if dbHandler.deleteCategory(cat_id):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "NotFound"})
+    except Exception as e:
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
+@app.route("/set-category-books", methods=["POST"])
+@admin_required
+def set_category_books():
+    try:
+        data    = request.get_json()
+        cat_id  = data.get("categoryId")
+        book_ids = data.get("bookIds", [])
+        if not cat_id:
+            return jsonify({"success": False, "error": "MissingID"})
+        dbHandler.setBooksForCategory(cat_id, book_ids)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
+@app.route("/get-booklist-with-categories")
+@login_required
+def get_booklist_with_categories():
+    try:
+        return jsonify(dbHandler.getAllBooksWithCategories())
+    except Exception as e:
+        return jsonify({"error": "ServerError"}), 500
+
+# ===== STATISTICS =====
+
+@app.route("/get-traffic-stats")
+@admin_required
+def get_traffic_stats():
+    try:
+        return jsonify(dbHandler.getTrafficStats())
+    except Exception as e:
+        return jsonify({"error": "ServerError"}), 500
+
+
+@app.route("/get-all-ratings")
+@login_required
+def get_all_ratings():
+    """Rating summary for all books — used to populate stars on book cards."""
+    try:
+        with dbHandler.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT BookID,
+                       ROUND(AVG(Stars), 1) as avg_stars,
+                       COUNT(*)             as rating_count
+                FROM BookRating
+                GROUP BY BookID
+            """)
+            return jsonify([
+                {"bookId": r[0], "avgStars": r[1], "ratingCount": r[2]}
+                for r in cursor.fetchall()
+            ])
+    except Exception as e:
+        return jsonify([])   # graceful — table may not exist yet
+
 @app.errorhandler(404)
 def not_found(e):
     return render_template("login.html"), 404

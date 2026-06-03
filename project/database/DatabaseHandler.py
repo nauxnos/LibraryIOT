@@ -472,6 +472,267 @@ class DatabaseHandler:
             return result
 
 
+    # ===== SEAT-BOOK LINK =====
+
+    def getSeatUserInfo(self, seat_id: int) -> Optional[Dict[str, Any]]:
+        """Get user + active borrows for whoever is currently booked at a seat."""
+        with self.get_cursor() as cursor:
+            now = datetime.now().isoformat()
+            # Find active booking for this seat
+            cursor.execute("""
+                SELECT sm.SeatBookingID, sm.UserID, u.UserName, u.Email,
+                       sm.StartTime, sm.EndTime
+                FROM SeatManager sm
+                JOIN User u ON sm.UserID = u.UserID
+                WHERE sm.SeatID = ?
+                  AND sm.StartTime <= ?
+                  AND (sm.EndTime IS NULL OR sm.EndTime > ?)
+                ORDER BY sm.StartTime DESC LIMIT 1
+            """, (seat_id, now, now))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            user_id = row[1]
+            # Get active borrows for that user
+            cursor.execute("""
+                SELECT b.BookID, b.BookName, b.Author,
+                       bm.StartTime, bm.EndTime, bm.BookBorrowID
+                FROM BookManager bm
+                JOIN Book b ON bm.BookID = b.BookID
+                WHERE bm.UserID = ? AND bm.ReturnedAt IS NULL
+                ORDER BY bm.StartTime DESC
+            """, (user_id,))
+            borrows = []
+            for brow in cursor.fetchall():
+                try:
+                    due = datetime.fromisoformat(brow[4]).strftime("%d/%m/%Y")
+                    overdue = datetime.now() > datetime.fromisoformat(brow[4])
+                except Exception:
+                    due, overdue = "—", False
+                borrows.append({
+                    "bookId":   brow[0],
+                    "title":    brow[1],
+                    "author":   brow[2],
+                    "borrowedAt": brow[3],
+                    "due":      due,
+                    "overdue":  overdue,
+                    "borrowId": brow[5],
+                })
+            return {
+                "bookingId": row[0],
+                "userId":    row[1],
+                "userName":  row[2],
+                "email":     row[3],
+                "start":     row[4],
+                "end":       row[5],
+                "borrows":   borrows,
+            }
+
+    # ===== BOOK RATING =====
+
+    def createRating(self, user_id: int, book_id: int, stars: int, comment: str) -> bool:
+        """Insert or replace a book rating (one per user per book)."""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM User WHERE UserID = ?", (user_id,))
+            if not cursor.fetchone():
+                return False
+            cursor.execute("""
+                INSERT INTO BookRating (UserID, BookID, Stars, Comment)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(UserID, BookID) DO UPDATE
+                SET Stars=excluded.Stars, Comment=excluded.Comment,
+                    CreatedAt=datetime('now')
+            """, (user_id, book_id, stars, comment))
+            return True
+
+    def getBookRatings(self, book_id: int) -> Dict[str, Any]:
+        """Get rating summary + individual ratings for a book."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT AVG(Stars), COUNT(*) FROM BookRating WHERE BookID = ?
+            """, (book_id,))
+            row = cursor.fetchone()
+            avg_stars = round(row[0], 1) if row[0] else 0
+            count     = row[1]
+            cursor.execute("""
+                SELECT u.UserName, br.Stars, br.Comment, br.CreatedAt
+                FROM BookRating br
+                JOIN User u ON br.UserID = u.UserID
+                WHERE br.BookID = ?
+                ORDER BY br.CreatedAt DESC
+            """, (book_id,))
+            reviews = [
+                {"userName": r[0], "stars": r[1], "comment": r[2], "date": r[3]}
+                for r in cursor.fetchall()
+            ]
+            return {"avg": avg_stars, "count": count, "reviews": reviews}
+
+    def getTopRatedBooks(self, period: str = "month") -> List[Dict[str, Any]]:
+        """Get top books by avg rating, filtered by period (week/month/year/all)."""
+        with self.get_cursor() as cursor:
+            date_filter = {
+                "week":  "datetime('now', '-7 days')",
+                "month": "datetime('now', '-30 days')",
+                "year":  "datetime('now', '-365 days')",
+            }.get(period, "datetime('now', '-3650 days')")
+
+            cursor.execute(f"""
+                SELECT b.BookID, b.BookName, b.Author,
+                       AVG(br.Stars) as avg_stars,
+                       COUNT(br.RatingID) as rating_count,
+                       b.BorrowedCount
+                FROM Book b
+                JOIN BookRating br ON b.BookID = br.BookID
+                WHERE br.CreatedAt >= {date_filter}
+                GROUP BY b.BookID
+                HAVING rating_count >= 1
+                ORDER BY avg_stars DESC, rating_count DESC
+                LIMIT 10
+            """)
+            return [
+                {
+                    "id": r[0], "title": r[1], "author": r[2],
+                    "avgStars": round(r[3], 1), "ratingCount": r[4],
+                    "borrowedCount": r[5]
+                }
+                for r in cursor.fetchall()
+            ]
+
+    def getUserRating(self, user_id: int, book_id: int) -> Optional[Dict]:
+        """Get this user's existing rating for a book (if any)."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT Stars, Comment FROM BookRating
+                WHERE UserID = ? AND BookID = ?
+            """, (user_id, book_id))
+            row = cursor.fetchone()
+            return {"stars": row[0], "comment": row[1]} if row else None
+
+    # ===== CATEGORY =====
+
+    def getAllCategories(self) -> List[Dict[str, Any]]:
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT c.CategoryID, c.Name, c.Description,
+                       COUNT(bc.BookID) as book_count
+                FROM Category c
+                LEFT JOIN BookCategory bc ON c.CategoryID = bc.CategoryID
+                GROUP BY c.CategoryID
+                ORDER BY c.Name
+            """)
+            return [
+                {"id": r[0], "name": r[1], "description": r[2], "bookCount": r[3]}
+                for r in cursor.fetchall()
+            ]
+
+    def insertCategory(self, name: str, description: str = "") -> bool:
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM Category WHERE Name = ?", (name,))
+            if cursor.fetchone(): return False
+            cursor.execute(
+                "INSERT INTO Category (Name, Description) VALUES (?, ?)",
+                (name, description)
+            )
+            return True
+
+    def deleteCategory(self, cat_id: int) -> bool:
+        with self.get_cursor() as cursor:
+            cursor.execute("DELETE FROM Category WHERE CategoryID = ?", (cat_id,))
+            return cursor.rowcount > 0
+
+    def setBooksForCategory(self, cat_id: int, book_ids: List[int]) -> bool:
+        """Replace all books in a category."""
+        with self.get_cursor() as cursor:
+            cursor.execute("DELETE FROM BookCategory WHERE CategoryID = ?", (cat_id,))
+            for bid in book_ids:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO BookCategory (CategoryID, BookID) VALUES (?, ?)",
+                    (cat_id, bid)
+                )
+            return True
+
+    def getBooksByCategory(self, cat_id: int) -> List[int]:
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT BookID FROM BookCategory WHERE CategoryID = ?", (cat_id,)
+            )
+            return [r[0] for r in cursor.fetchall()]
+
+    def getAllBooksWithCategories(self) -> List[Dict[str, Any]]:
+        """Get all books with their category IDs."""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT BookID, BookName, Author, Status, BorrowedCount FROM Book")
+            books = {r[0]: {"id": r[0], "title": r[1], "author": r[2],
+                            "status": bool(r[3]), "borrowedCount": r[4],
+                            "categories": []}
+                     for r in cursor.fetchall()}
+            cursor.execute("SELECT BookID, CategoryID FROM BookCategory")
+            for bid, cid in cursor.fetchall():
+                if bid in books:
+                    books[bid]["categories"].append(cid)
+            return list(books.values())
+
+    # ===== STATISTICS =====
+
+    def getTrafficStats(self) -> Dict[str, Any]:
+        """Booking + borrow counts by hour-of-day and by day-of-week."""
+        with self.get_cursor() as cursor:
+            # By hour
+            cursor.execute("""
+                SELECT strftime('%H', StartTime) as hr, COUNT(*) as cnt
+                FROM SeatManager GROUP BY hr ORDER BY hr
+            """)
+            by_hour_seat = {int(r[0]): r[1] for r in cursor.fetchall()}
+
+            cursor.execute("""
+                SELECT strftime('%H', StartTime) as hr, COUNT(*) as cnt
+                FROM BookManager GROUP BY hr ORDER BY hr
+            """)
+            by_hour_book = {int(r[0]): r[1] for r in cursor.fetchall()}
+
+            # By day of week (0=Sun in SQLite)
+            cursor.execute("""
+                SELECT strftime('%w', StartTime) as dow, COUNT(*) as cnt
+                FROM SeatManager GROUP BY dow ORDER BY dow
+            """)
+            by_dow_seat = {int(r[0]): r[1] for r in cursor.fetchall()}
+
+            cursor.execute("""
+                SELECT strftime('%w', StartTime) as dow, COUNT(*) as cnt
+                FROM BookManager GROUP BY dow ORDER BY dow
+            """)
+            by_dow_book = {int(r[0]): r[1] for r in cursor.fetchall()}
+
+            # Daily trend (last 30 days)
+            cursor.execute("""
+                SELECT date(StartTime) as d, COUNT(*) as cnt
+                FROM SeatManager
+                WHERE StartTime >= datetime('now', '-30 days')
+                GROUP BY d ORDER BY d
+            """)
+            daily_seat = [{"date": r[0], "count": r[1]} for r in cursor.fetchall()]
+
+            cursor.execute("""
+                SELECT date(StartTime) as d, COUNT(*) as cnt
+                FROM BookManager
+                WHERE StartTime >= datetime('now', '-30 days')
+                GROUP BY d ORDER BY d
+            """)
+            daily_book = [{"date": r[0], "count": r[1]} for r in cursor.fetchall()]
+
+            return {
+                "byHour": {
+                    "seat": [by_hour_seat.get(h, 0) for h in range(24)],
+                    "book": [by_hour_book.get(h, 0) for h in range(24)],
+                },
+                "byDow": {
+                    "seat": [by_dow_seat.get(d, 0) for d in range(7)],
+                    "book": [by_dow_book.get(d, 0) for d in range(7)],
+                },
+                "daily": {"seat": daily_seat, "book": daily_book},
+            }
+
+
     # ===== HELPERS =====
 
     def _load_seat_names(self) -> Dict[int, str]:

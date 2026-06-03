@@ -68,11 +68,13 @@ const Navigation = {
     document.getElementById(`section-${section}`)?.classList.add('active');
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     triggerEl?.closest('.nav-item')?.classList.add('active');
-    ({ layout: () => setTimeout(() => Canvas.init(), 100),
-       books:   () => Books.loadList(),
-       accounts:() => Accounts.loadList(),
-       dashboard:() => Dashboard.refresh(),
-       schedule: () => Schedule.load(),
+    ({ layout:     () => setTimeout(() => Canvas.init(), 100),
+       books:      () => Books.loadList(),
+       accounts:   () => Accounts.loadList(),
+       dashboard:  () => Dashboard.refresh(),
+       schedule:   () => Schedule.load(),
+       categories: () => Categories.load(),
+       statistics: () => Statistics.load(),
     })[section]?.();
   },
 };
@@ -586,7 +588,13 @@ const Schedule = {
               <span>▶ ${Utils.fmtDatetime(b.start)}</span>
               <span>■ ${b.active ? '<em style="color:var(--danger)">Đang thuê</em>' : Utils.fmtDatetime(b.end)}</span>
             </div>
-            ${b.active ? `<button class="sch-cancel-btn" onclick="Schedule.cancelBooking(${b.bookingId},'${b.seatName}','${b.userName}')">Hủy đặt</button>` : ''}
+            ${b.active ? `
+              <div style="display:flex;gap:6px;margin-top:8px">
+                <button class="sch-info-btn" onclick="SeatInfoPopup.show(${b.seatId},'${b.seatName}')">
+                  📖 Xem sách đang mượn
+                </button>
+                <button class="sch-cancel-btn" onclick="Schedule.cancelBooking(${b.bookingId},'${b.seatName}','${b.userName}')">Hủy đặt</button>
+              </div>` : ''}
           </div>`;
         }).join('')
       : '<p style="padding:1.5rem 0;text-align:center;color:var(--text-3)">Không có đặt chỗ ngày này</p>';
@@ -864,9 +872,289 @@ const Pricing = {
 };
 
 // ─────────────────────────────────────────────
+// SEAT INFO POPUP  — admin click ghế → xem user + sách
+// ─────────────────────────────────────────────
+const SeatInfoPopup = {
+  async show(seatId, seatName) {
+    Utils.showToast('Đang tải thông tin ghế...', 'info');
+    try {
+      const info = await Utils.fetchJSON(`/get-seat-user-info?seat_id=${seatId}`);
+      this._render(seatName, info);
+    } catch {
+      Utils.showToast('Lỗi tải thông tin', 'error');
+    }
+  },
+
+  _render(seatName, info) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+    if (!info) {
+      overlay.innerHTML = `<div class="modal" style="max-width:400px">
+        <div class="modal-header"><h3>${seatName}</h3>
+          <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+        </div>
+        <div class="modal-body">
+          <p style="color:var(--text-3);text-align:center;padding:1rem">
+            Ghế hiện không có ai đặt lịch
+          </p>
+        </div>
+      </div>`;
+      document.body.appendChild(overlay);
+      return;
+    }
+
+    const borrowsHtml = info.borrows.length
+      ? info.borrows.map(b => `
+          <div class="sip-borrow${b.overdue ? ' sip-overdue' : ''}">
+            <div class="sip-book-title">${b.title}</div>
+            <div class="sip-book-author">${b.author}</div>
+            <div class="sip-book-due ${b.overdue ? 'sip-due-late' : ''}">
+              ${b.overdue ? '⚠ Quá hạn —' : 'Hạn:'} ${b.due}
+            </div>
+          </div>`).join('')
+      : '<p style="color:var(--text-3);font-size:13px;padding:6px 0">Không mượn sách</p>';
+
+    overlay.innerHTML = `<div class="modal" style="max-width:440px">
+      <div class="modal-header">
+        <h3>💺 ${seatName} — Thông tin user</h3>
+        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="sip-user-card">
+          <div class="sip-avatar">${info.userName[0].toUpperCase()}</div>
+          <div>
+            <div class="sip-name">${info.userName}</div>
+            <div class="sip-email">${info.email}</div>
+          </div>
+        </div>
+        <div class="sip-time-row">
+          <span>▶ ${Utils.fmtDatetime(info.start)}</span>
+          <span>${info.end ? '■ ' + Utils.fmtDatetime(info.end) : '<em style="color:#C0392B">Đang thuê</em>'}</span>
+        </div>
+        <div class="sip-section-label">Sách đang mượn</div>
+        <div class="sip-borrows">${borrowsHtml}</div>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  },
+};
+
+// ─────────────────────────────────────────────
+// CATEGORY MANAGEMENT  (admin)
+// ─────────────────────────────────────────────
+const Categories = {
+  _cats: [],
+  _books: [],
+
+  async load() {
+    try {
+      [this._cats, this._books] = await Promise.all([
+        Utils.fetchJSON('/get-categories'),
+        Utils.fetchJSON('/get-booklist-with-categories'),
+      ]);
+      this._render();
+    } catch(e) { console.error('Categories load:', e); }
+  },
+
+  _render() {
+    const wrap = document.getElementById('section-categories');
+    if (!wrap) return;
+    const list = this._cats.map(c => `
+      <div class="cat-item">
+        <div class="cat-item-head">
+          <div>
+            <div class="cat-item-name">${c.name}</div>
+            <div class="cat-item-desc">${c.description || '—'}</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span class="badge info">${c.bookCount} sách</span>
+            <button class="action-btn edit" onclick="Categories._openAssign(${c.id}, '${c.name}')">Phân sách</button>
+            <button class="action-btn delete" onclick="Categories._delete(${c.id})">Xóa</button>
+          </div>
+        </div>
+      </div>`).join('') || '<p class="db-empty-hint">Chưa có chủ đề nào</p>';
+
+    const el = document.getElementById('cat-list');
+    if (el) el.innerHTML = list;
+  },
+
+  async _add() {
+    const name = document.getElementById('cat-name-input')?.value.trim();
+    const desc = document.getElementById('cat-desc-input')?.value.trim() || '';
+    if (!name) return Utils.showToast('Nhập tên chủ đề', 'error');
+    try {
+      const res = await Utils.post('/add-category', { name, description: desc });
+      if (res.success) {
+        document.getElementById('cat-name-input').value = '';
+        document.getElementById('cat-desc-input').value = '';
+        await this.load();
+        Utils.showToast('Đã thêm chủ đề!', 'success');
+      } else Utils.showToast('Chủ đề đã tồn tại', 'error');
+    } catch { Utils.showToast('Lỗi server', 'error'); }
+  },
+
+  async _delete(id) {
+    const cat = this._cats.find(c => c.id === id);
+    if (!confirm(`Xóa chủ đề "${cat?.name}"?`)) return;
+    try {
+      const res = await Utils.post('/delete-category', { id });
+      if (res.success) { await this.load(); Utils.showToast('Đã xóa!', 'success'); }
+    } catch { Utils.showToast('Lỗi server', 'error'); }
+  },
+
+  _openAssign(catId, catName) {
+    const cat = this._cats.find(c => c.id === catId);
+    const currentIds = this._books.filter(b => b.categories?.includes(catId)).map(b => b.id);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+    const checkboxes = this._books.map(b => `
+      <label class="cat-assign-row">
+        <input type="checkbox" value="${b.id}" ${currentIds.includes(b.id) ? 'checked' : ''} />
+        <span>${b.title}</span>
+        <span style="color:var(--text-3);font-size:12px">${b.author}</span>
+      </label>`).join('');
+
+    overlay.innerHTML = `<div class="modal" style="max-width:480px">
+      <div class="modal-header">
+        <h3>📚 Phân sách — ${catName}</h3>
+        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+      </div>
+      <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+        <div id="cat-assign-list">${checkboxes}</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="this.closest('.modal-overlay').remove()">Hủy</button>
+        <button class="btn-primary" onclick="Categories._saveAssign(${catId}, this)">Lưu</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  },
+
+  async _saveAssign(catId, btn) {
+    const checkboxes = document.querySelectorAll('#cat-assign-list input[type=checkbox]:checked');
+    const bookIds = [...checkboxes].map(cb => +cb.value);
+    btn.disabled = true; btn.textContent = 'Đang lưu...';
+    try {
+      await Utils.post('/set-category-books', { categoryId: catId, bookIds });
+      btn.closest('.modal-overlay').remove();
+      await this.load();
+      Utils.showToast('Đã cập nhật phân loại sách!', 'success');
+    } catch { Utils.showToast('Lỗi server', 'error'); btn.disabled = false; btn.textContent = 'Lưu'; }
+  },
+};
+
+// ─────────────────────────────────────────────
+// STATISTICS  (admin)
+// ─────────────────────────────────────────────
+const Statistics = {
+  _data: null,
+
+  async load() {
+    try {
+      this._data = await Utils.fetchJSON('/get-traffic-stats');
+      this._renderCharts();
+    } catch(e) { console.error('Stats:', e); }
+  },
+
+  _renderCharts() {
+    if (!this._data) return;
+    const { byHour, byDow, daily } = this._data;
+    this._renderHour(byHour);
+    this._renderDow(byDow);
+    this._renderDaily(daily);
+  },
+
+  _renderHour(byHour) {
+    const el = document.getElementById('chart-hour');
+    if (!el) return;
+    const labels = Array.from({length: 24}, (_, i) => `${String(i).padStart(2,'0')}h`);
+    el.innerHTML = this._barChart('Lưu lượng theo giờ trong ngày', labels,
+      [{ label: 'Đặt chỗ', data: byHour.seat, color: '#2D5A3D' },
+       { label: 'Mượn sách', data: byHour.book, color: '#C8A96E' }]);
+  },
+
+  _renderDow(byDow) {
+    const el = document.getElementById('chart-dow');
+    if (!el) return;
+    const labels = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+    el.innerHTML = this._barChart('Lưu lượng theo thứ trong tuần', labels,
+      [{ label: 'Đặt chỗ', data: byDow.seat, color: '#2D5A3D' },
+       { label: 'Mượn sách', data: byDow.book, color: '#C8A96E' }]);
+  },
+
+  _renderDaily(daily) {
+    const el = document.getElementById('chart-daily');
+    if (!el) return;
+    // Merge seat + book into one timeline
+    const allDates = [...new Set([
+      ...daily.seat.map(d => d.date),
+      ...daily.book.map(d => d.date),
+    ])].sort();
+    const seatMap = Object.fromEntries(daily.seat.map(d => [d.date, d.count]));
+    const bookMap = Object.fromEntries(daily.book.map(d => [d.date, d.count]));
+    const labels = allDates.map(d => {
+      const dt = new Date(d);
+      return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
+    });
+    el.innerHTML = this._barChart('30 ngày gần nhất', labels,
+      [{ label: 'Đặt chỗ', data: allDates.map(d => seatMap[d] || 0), color: '#2D5A3D' },
+       { label: 'Mượn sách', data: allDates.map(d => bookMap[d] || 0), color: '#C8A96E' }]);
+  },
+
+  _barChart(title, labels, datasets) {
+    const max = Math.max(1, ...datasets.flatMap(ds => ds.data));
+    const barW = Math.max(8, Math.min(32, Math.floor(560 / labels.length) - 4));
+    const gap  = Math.max(2, Math.floor(560 / labels.length) - barW);
+    const H    = 160;
+
+    const bars = labels.map((label, i) => {
+      const groupX = i * (barW * datasets.length + gap + 4);
+      return datasets.map((ds, di) => {
+        const h   = Math.round((ds.data[i] / max) * H);
+        const x   = groupX + di * (barW + 2);
+        const y   = H - h;
+        return `<rect x="${x}" y="${y}" width="${barW}" height="${h}"
+          fill="${ds.color}" opacity="0.85" rx="2">
+          <title>${ds.label}: ${ds.data[i]}</title></rect>`;
+      }).join('');
+    }).join('');
+
+    const xLabels = labels.filter((_, i) => i % Math.max(1, Math.floor(labels.length / 12)) === 0)
+      .map((label, i) => {
+        const idx = i * Math.max(1, Math.floor(labels.length / 12));
+        const x = idx * (barW * datasets.length + gap + 4) + barW;
+        return `<text x="${x}" y="${H + 14}" font-size="9" fill="#888" text-anchor="middle">${label}</text>`;
+      }).join('');
+
+    const legend = datasets.map(ds =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#666;margin-right:12px">
+        <span style="width:10px;height:10px;border-radius:2px;background:${ds.color};display:inline-block"></span>${ds.label}</span>`
+    ).join('');
+
+    return `
+      <div class="stat-chart-card">
+        <div class="stat-chart-title">${title}</div>
+        <div style="margin-bottom:6px">${legend}</div>
+        <div style="overflow-x:auto">
+          <svg viewBox="0 0 ${Math.max(560, labels.length * (barW * datasets.length + gap + 4))} ${H + 20}"
+            style="width:100%;min-width:300px;height:${H + 24}px">
+            ${bars}${xLabels}
+          </svg>
+        </div>
+      </div>`;
+  },
+};
+
+// ─────────────────────────────────────────────
 // GLOBAL BINDINGS  (HTML onclick)
 // ─────────────────────────────────────────────
 const showSection    = (s) => Navigation.showSection(s, event?.target);
+const showSeatInfo   = (id, name) => SeatInfoPopup.show(id, name);
 const adminLogout    = ()  => Auth.logout();
 const selectShape    = (s) => Canvas.setShape(s);
 const selectType     = (t) => Canvas.setType(t);

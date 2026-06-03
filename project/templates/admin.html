@@ -103,6 +103,23 @@
           </svg>
           <span>Lịch Đặt Chỗ</span>
         </button>
+        <button class="nav-item" onclick="showSection('categories')">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="2" y="2" width="7" height="7" rx="1.5"/>
+            <rect x="11" y="2" width="7" height="7" rx="1.5"/>
+            <rect x="2" y="11" width="7" height="7" rx="1.5"/>
+            <rect x="11" y="11" width="7" height="7" rx="1.5"/>
+          </svg>
+          <span>Chủ Đề Sách</span>
+        </button>
+ 
+        <button class="nav-item" onclick="showSection('statistics')">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M3 14l4-5 4 3 3-4 3 2"/>
+            <rect x="2" y="16" width="16" height="1.5" rx=".5"/>
+          </svg>
+          <span>Thống Kê</span>
+        </button>
       </nav>
       
       <div class="sidebar-footer">
@@ -423,8 +440,40 @@
  
         <!-- Toàn bộ calendar render vào đây bởi Schedule._render() -->
         <div id="schedule-wrap"></div>
+        </section>
+        <section id="section-categories" class="admin-section">
+        <div class="section-header">
+          <div><h2>Chủ Đề Sách</h2><p>Phân loại sách theo chủ đề để user dễ tìm kiếm</p></div>
+        </div>
+        <div class="act-log-card" style="margin-bottom:var(--sp-3);padding:var(--sp-3)">
+          <h4 style="font-size:var(--text-sm);font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:var(--sp-2)">Thêm chủ đề mới</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end">
+            <div class="form-group" style="margin:0">
+              <label>Tên chủ đề</label>
+              <input type="text" id="cat-name-input" placeholder="Ví dụ: Kỹ năng sống"/>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>Mô tả (tuỳ chọn)</label>
+              <input type="text" id="cat-desc-input" placeholder="Mô tả ngắn..."/>
+            </div>
+            <button class="btn-add" onclick="Categories._add()">+ Thêm</button>
+          </div>
+        </div>
+        <div id="cat-list"></div>
       </section>
-
+  
+      <!-- Statistics Section -->
+      <section id="section-statistics" class="admin-section">
+        <div class="section-header">
+          <div><h2>Thống Kê Lưu Lượng</h2><p>Phân tích hoạt động đặt chỗ và mượn sách</p></div>
+          <button class="btn-add" onclick="Statistics.load()">↻ Làm mới</button>
+        </div>
+        <div id="chart-daily"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3)">
+          <div id="chart-hour"></div>
+          <div id="chart-dow"></div>
+        </div>
+      </section>
     </div>
   </div>
 

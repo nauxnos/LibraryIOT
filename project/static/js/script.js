@@ -957,6 +957,7 @@ const ReturnConfirm = {
   async _submit(borrowId) {
     const btn = document.getElementById('rconf-ok');
     if (btn) { btn.disabled = true; btn.textContent = 'Đang xử lý...'; }
+    const borrowInfo = AppState.myBorrows.find(b => b.borrowId === borrowId);
 
     try {
       const res = await Utils.post('/return-book', { borrowId });
@@ -969,6 +970,7 @@ const ReturnConfirm = {
         ]);
         Books.render();
         Utils.showToast('Đã trả sách!', 'success');
+        if (borrowInfo) BookRating.prompt(borrowInfo);
         Modal.openManage('books');
       } else {
         Utils.showToast('Trả sách thất bại', 'error');
@@ -998,9 +1000,34 @@ const Books = {
 
   async load() {
     try {
-      AppState.books = await Utils.fetchJSON('/get-booklist');
+      AppState.books = await Utils.fetchJSON('/get-booklist-with-categories');
+      await this._loadRatings();
+      CategoryFilter.init();   // cập nhật chip lọc theo chủ đề
       this.render();
     } catch(e) { console.error('load books:', e); }
+  },
+
+  async _loadRatings() {
+    try {
+      const ratings = await Utils.fetchJSON('/get-all-ratings');
+      // Key bằng string để tránh type mismatch khi lookup
+      const map = Object.fromEntries(ratings.map(r => [String(r.bookId), r]));
+      AppState.books.forEach(b => {
+        const r = map[String(b.id)];
+        b.avgStars    = r?.avgStars    || 0;
+        b.ratingCount = r?.ratingCount || 0;
+      });
+    } catch { /* ratings optional — bảng có thể chưa tồn tại */ }
+  },
+
+  async showRatings(bookId, event) {
+    event?.stopPropagation();
+    const book = AppState.books.find(b => b.id === bookId);
+    if (!book) return;
+    try {
+      const data = await Utils.fetchJSON(`/get-book-ratings?book_id=${bookId}`);
+      BookRatingView.show(book, data);
+    } catch { Utils.showToast('Lỗi tải đánh giá', 'error'); }
   },
 
   render() {
@@ -1018,7 +1045,7 @@ const Books = {
       const label    = isMine ? 'Đang mượn' : !book.status ? 'Hết sách'
                      : !canBorrow ? 'Đã đủ 3 quyển' : 'Mượn sách';
       return `
-        <div class="book-card" data-title="${book.title.toLowerCase()}" data-author="${book.author.toLowerCase()}">
+        <div class="book-card" data-title="${book.title.toLowerCase()}" data-author="${book.author.toLowerCase()}" data-book-id="${book.id}" onclick="Books.openDetail(${book.id})">
           <div class="book-cover" style="background:${color}">
             <span class="book-cover-initials">${initials}</span>
             ${!book.status ? '<div class="book-cover-unavail">Hết</div>' : ''}
@@ -1033,8 +1060,13 @@ const Books = {
               ${book.borrowedCount > 0
                 ? `<span class="book-borrow-count">${book.borrowedCount} lượt</span>` : ''}
             </div>
+            ${book.avgStars ? `<div class="book-rating-row" onclick="event.stopPropagation(); Books.showRatings(${book.id}, event)">
+              <span class="book-stars">${'★'.repeat(Math.round(book.avgStars))}${'☆'.repeat(5 - Math.round(book.avgStars))}</span>
+              <span class="book-rating-num">${book.avgStars.toFixed(1)}</span>
+              <span class="book-rating-count">(${book.ratingCount})</span>
+            </div>` : ''}
             <button class="btn-borrow${disabled ? ' disabled' : ''}"
-              ${disabled ? 'disabled' : ''} onclick="Books.openBorrow(${book.id})">
+              ${disabled ? 'disabled' : ''} onclick="event.stopPropagation(); Books.openBorrow(${book.id})">
               ${label}
             </button>
           </div>
@@ -1067,6 +1099,14 @@ const Books = {
     if (book?.status) BookPopup.show(book);
   },
 
+  async openDetail(bookId) {
+    const book = AppState.books.find(b => b.id === bookId);
+    if (!book) return;
+    let ratingsData = { avg: 0, count: 0, reviews: [], myRating: null };
+    try { ratingsData = await Utils.fetchJSON(`/get-book-ratings?book_id=${bookId}`); } catch {}
+    BookDetail.show(book, ratingsData);
+  },
+
   confirmReturn(borrowId) {
     const borrow = AppState.myBorrows.find(b => b.borrowId === borrowId);
     if (borrow) ReturnConfirm.show(borrow);
@@ -1078,6 +1118,151 @@ const Books = {
       card.style.display =
         card.dataset.title.includes(q) || card.dataset.author.includes(q) ? '' : 'none';
     });
+  },
+};
+
+// ─────────────────────────────────────────────
+// BOOK RATING  — hiện sau khi trả sách
+// ─────────────────────────────────────────────
+const BookRating = {
+  _s: null,
+
+  // Gọi sau khi trả sách thành công
+  prompt(borrow) {
+    // Đợi 400ms để sheet trả sách đóng xong
+    setTimeout(() => this._show(borrow), 400);
+  },
+
+  _show(borrow) {
+    const sheet = document.createElement('div');
+    sheet.className = 'rconf-sheet rating-sheet';
+    sheet.innerHTML = `
+      <div class="rconf-handle"></div>
+      <div class="rating-icon">⭐</div>
+      <h3 class="rconf-title">Đánh giá sách</h3>
+      <div class="rconf-book-name">${borrow.title}</div>
+      <div class="rconf-author">${borrow.author}</div>
+      <div class="rating-stars" id="rating-stars">
+        ${[1,2,3,4,5].map(i =>
+          `<button class="star-btn" data-star="${i}" onclick="BookRating._setStar(${i})">★</button>`
+        ).join('')}
+      </div>
+      <div class="rating-hint" id="rating-hint">Nhấn sao để đánh giá</div>
+      <textarea class="rating-comment" id="rating-comment"
+        placeholder="Nhận xét của bạn (không bắt buộc)..." rows="3"></textarea>
+      <div class="rconf-footer">
+        <button class="rconf-btn-cancel" onclick="BookRating._dismiss()">Bỏ qua</button>
+        <button class="rconf-btn-confirm" id="rating-ok" disabled
+          onclick="BookRating._submit(${borrow.bookId})">Gửi đánh giá</button>
+      </div>`;
+    document.body.appendChild(sheet);
+    this._s = { sheet, star: 0, bookId: borrow.bookId };
+    requestAnimationFrame(() => sheet.classList.add('open'));
+  },
+
+  _setStar(n) {
+    if (!this._s) return;
+    this._s.star = n;
+    const LABELS = ['', 'Rất tệ', 'Tệ', 'Bình thường', 'Tốt', 'Xuất sắc'];
+    document.querySelectorAll('.bdl-star-btn').forEach(btn => {
+      btn.classList.toggle('lit', +btn.dataset.n <= n);
+    });
+    const hint = document.getElementById('bdl-star-hint');
+    if (hint) {
+      hint.textContent = LABELS[n];
+      hint.classList.add('chosen');
+    }
+    const btn = document.getElementById('bdl-submit');
+    if (btn) btn.disabled = false;
+  },
+
+  async _submit(bookId) {
+    const { star } = this._s;
+    if (!star) return;
+    const comment = document.getElementById('rating-comment')?.value.trim() || '';
+    const btn = document.getElementById('rating-ok');
+    if (btn) { btn.disabled = true; btn.textContent = 'Đang gửi...'; }
+    try {
+      await Utils.post('/rate-book', { bookId, stars: star, comment });
+      this._dismiss();
+      Utils.showToast('Cảm ơn đánh giá của bạn! ⭐', 'success');
+    } catch {
+      if (btn) { btn.disabled = false; btn.textContent = 'Gửi đánh giá'; }
+    }
+  },
+
+  _dismiss() {
+    if (!this._s) return;
+    this._s.sheet.classList.remove('open');
+    const s = this._s.sheet;
+    this._s = null;
+    setTimeout(() => s.remove(), 280);
+  },
+};
+
+// ─────────────────────────────────────────────
+// CATEGORY FILTER  — chip lọc trên trang sách
+// ─────────────────────────────────────────────
+const CategoryFilter = {
+  _cats: [],
+  _active: null,   // null = all
+
+  async init() {
+    try {
+      this._cats = await Utils.fetchJSON('/get-categories');
+      this._render();
+    } catch { /* silent */ }
+  },
+
+  _render() {
+    // Tìm hoặc tạo container chip
+    let wrap = document.getElementById('category-filter-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'category-filter-wrap';
+      wrap.className = 'cat-filter-wrap';
+      const grid = document.getElementById('books-grid');
+      if (grid) grid.parentElement.insertBefore(wrap, grid);
+    }
+    if (!this._cats.length) { wrap.innerHTML = ''; return; }
+
+    wrap.innerHTML = [
+      { id: null, name: 'Tất cả', bookCount: AppState.books.length },
+      ...this._cats,
+    ].map(c => `
+      <button class="cat-chip${this._active === c.id ? ' active' : ''}"
+        onclick="CategoryFilter.setActive(${c.id})">
+        ${c.name}
+        <span class="cat-chip-count">${c.bookCount ?? ''}</span>
+      </button>`
+    ).join('');
+  },
+
+  setActive(id) {
+    this._active = id;
+    this._render();
+    this._applyFilter();
+  },
+
+  _applyFilter() {
+    if (this._active === null) {
+      // Show all
+      document.querySelectorAll('.book-card').forEach(c => c.style.display = '');
+      return;
+    }
+    const cat = this._cats.find(c => c.id === this._active);
+    if (!cat) return;
+    // Get book IDs in this category from loaded books data
+    document.querySelectorAll('.book-card').forEach(card => {
+      const id = +card.dataset.bookId;
+      const book = AppState.books.find(b => b.id === id);
+      const inCat = book?.categories?.includes(this._active);
+      card.style.display = inCat ? '' : 'none';
+    });
+  },
+
+  async reload() {
+    try { this._cats = await Utils.fetchJSON('/get-categories'); this._render(); } catch {}
   },
 };
 
@@ -1146,6 +1331,253 @@ const SensorPresence = {
   // Check if a seat is physically occupied (used by SeatPopup warning)
   isOccupied(seatId) {
     return this._state[seatId]?.occupied === true;
+  },
+};
+
+
+// ─────────────────────────────────────────────
+// BOOK DETAIL  — trang chi tiết sách
+// Click vào card → sheet đầy đủ:
+//   cover | tên | tác giả | trạng thái | nút mượn
+//   đánh giá tổng | danh sách reviews | form viết review
+// ─────────────────────────────────────────────
+const BookDetail = {
+  _s: null,
+
+  show(book, ratingsData) {
+    this._close();
+    const { overlay, modal } = Utils.createSheet('bdl-overlay', 'bdl-modal', () => this._close());
+    this._s = { overlay, modal, book, ratingsData };
+    this._paint();
+    Utils.openSheet(overlay, modal);
+  },
+
+  _paint() {
+    const { modal, book, ratingsData } = this._s;
+    const color    = Books.COLORS[AppState.books.findIndex(b => b.id === book.id) % 8] || '#EAF3DE';
+    const initials = book.title.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
+    const isMine   = AppState.myBorrows.some(b => b.bookId === book.id);
+    const avail    = book.status && !isMine;
+    const canBorrow = AppState.myBorrows.length < Books.MAX;
+    const disabled  = !avail || !canBorrow;
+    const btnLabel  = isMine ? 'Đang mượn'
+                    : !book.status ? 'Hết sách'
+                    : !canBorrow ? 'Đã đủ 3 quyển'
+                    : 'Mượn sách';
+
+    const stars = n => '★'.repeat(Math.max(0, n)) + '☆'.repeat(Math.max(0, 5 - n));
+    const { avg = 0, count = 0, reviews = [], myRating = null } = ratingsData;
+
+    /* ── Rating bars ── */
+    const dist = [5, 4, 3, 2, 1].map(n => {
+      const cnt = reviews.filter(r => r.stars === n).length;
+      const pct = count ? Math.round((cnt / count) * 100) : 0;
+      return `<div class="bdl-bar-row">
+        <span class="bdl-bar-label">${stars(n)}</span>
+        <div class="bdl-bar-track"><div class="bdl-bar-fill" style="width:${pct}%"></div></div>
+        <span class="bdl-bar-cnt">${cnt}</span>
+      </div>`;
+    }).join('');
+
+    /* ── Reviews ── */
+    const reviewsHtml = reviews.length
+      ? reviews.map(r => `
+        <div class="bdl-review">
+          <div class="bdl-rev-head">
+            <div class="bdl-avatar">${(r.userName || '?')[0].toUpperCase()}</div>
+            <div class="bdl-rev-meta">
+              <span class="bdl-rev-name">${r.userName || 'Ẩn danh'}</span>
+              <span class="bdl-rev-stars">${stars(r.stars)}</span>
+            </div>
+            <span class="bdl-rev-date">${r.date?.slice(0, 10) || ''}</span>
+          </div>
+          ${r.comment ? `<div class="bdl-rev-text">${r.comment}</div>` : ''}
+        </div>`).join('')
+      : '<p class="bdl-no-reviews">Chưa có đánh giá nào.<br>Hãy là người đầu tiên!</p>';
+
+    /* ── Write / show my review ── */
+    const reviewBlock = myRating
+      ? `<div class="bdl-my-box">
+          <div class="bdl-section-label">Đánh giá của bạn</div>
+          <div class="bdl-my-stars">${stars(myRating.stars)}</div>
+          ${myRating.comment ? `<div class="bdl-my-comment">"${myRating.comment}"</div>` : ''}
+        </div>`
+      : `<div class="bdl-write-section">
+          <div class="bdl-section-label">Viết đánh giá</div>
+          <div class="bdl-stars-row" id="bdl-stars-row">
+            ${[1,2,3,4,5].map(i =>
+              `<button class="bdl-star-btn" data-n="${i}" onclick="BookDetail._setStar(${i})">★</button>`
+            ).join('')}
+          </div>
+          <div class="bdl-star-hint" id="bdl-star-hint">Chọn số sao</div>
+          <textarea class="bdl-comment-input" id="bdl-comment"
+            placeholder="Nhận xét của bạn (tuỳ chọn)..." rows="3"></textarea>
+          <button class="bdl-submit-btn" id="bdl-submit" disabled
+            onclick="BookDetail._submitRating(${book.id})">Gửi đánh giá</button>
+        </div>`;
+
+    /* ── Badges ── */
+    const statusClass = isMine ? 'bdl-badge-mine' : avail ? 'bdl-badge-avail' : 'bdl-badge-out';
+    const statusLabel = isMine ? 'Đang mượn' : book.status ? 'Còn sách' : 'Hết sách';
+    const badgesHtml  = `
+      <span class="bdl-badge ${statusClass}">${statusLabel}</span>
+      ${book.borrowedCount > 0
+        ? `<span class="bdl-badge bdl-badge-count">${book.borrowedCount} lượt mượn</span>` : ''}
+      ${avg > 0
+        ? `<span class="bdl-badge bdl-badge-stars">${stars(Math.round(avg))} ${avg.toFixed(1)}</span>` : ''}`;
+
+    /* ── Rating summary card ── */
+    const ratingCard = count > 0 ? `
+      <div class="bdl-rating-card">
+        <div class="bdl-score-col">
+          <span class="bdl-score-num">${avg.toFixed(1)}</span>
+          <span class="bdl-score-stars">${stars(Math.round(avg))}</span>
+          <span class="bdl-score-total">${count} đánh giá</span>
+        </div>
+        <div class="bdl-divider-v"></div>
+        <div class="bdl-bars">${dist}</div>
+      </div>` : '';
+
+    /* ── Render ── */
+    modal.innerHTML = `
+      <div class="bdl-handle"></div>
+
+      <div class="bdl-hero" style="background:${color}">
+        <button class="bdl-close" onclick="BookDetail._close()" aria-label="Đóng">✕</button>
+        <div class="bdl-cover-initials">${initials}</div>
+      </div>
+
+      <div class="bdl-info-section">
+        <h2 class="bdl-title">${book.title}</h2>
+        <p class="bdl-author">${book.author}</p>
+        <div class="bdl-badges">${badgesHtml}</div>
+        <button class="bdl-borrow-btn"
+          ${disabled ? 'disabled' : ''}
+          onclick="BookDetail._borrow()">
+          ${btnLabel}
+        </button>
+      </div>
+
+      <div class="bdl-section">
+        <div class="bdl-section-label">Đánh giá &amp; Nhận xét</div>
+        ${ratingCard}
+        ${reviewBlock}
+        <div class="bdl-reviews">${reviewsHtml}</div>
+      </div>`;
+  },
+
+  _setStar(n) {
+    if (!this._s) return;
+    this._s.star = n;
+    const LABELS = ['','Rất tệ','Tệ','Bình thường','Tốt','Xuất sắc'];
+    document.querySelectorAll('.bdl-star-btn').forEach(btn => {
+      btn.classList.toggle('active', +btn.dataset.n <= n);
+    });
+    const hint = document.getElementById('bdl-star-hint');
+    if (hint) hint.textContent = LABELS[n];
+    const btn = document.getElementById('bdl-submit');
+    if (btn) btn.disabled = false;
+  },
+
+  async _submitRating(bookId) {
+    const star    = this._s?.star;
+    if (!star) return;
+    const comment = document.getElementById('bdl-comment')?.value.trim() || '';
+    const btn     = document.getElementById('bdl-submit');
+    if (btn) { btn.disabled = true; btn.textContent = 'Đang gửi...'; }
+    try {
+      const res = await Utils.post('/rate-book', { bookId, stars: star, comment });
+      if (res.success) {
+        Utils.showToast('Đã gửi đánh giá! ⭐', 'success');
+        // Reload ratings and repaint
+        const data = await Utils.fetchJSON(`/get-book-ratings?book_id=${bookId}`);
+        this._s.ratingsData = data;
+        // Also update AppState
+        const book = AppState.books.find(b => b.id === bookId);
+        if (book) { book.avgStars = data.avg; book.ratingCount = data.count; }
+        Books.render();
+        this._paint();
+      } else {
+        Utils.showToast('Lỗi gửi đánh giá', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Gửi đánh giá'; }
+      }
+    } catch {
+      Utils.showToast('Lỗi kết nối', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Gửi đánh giá'; }
+    }
+  },
+
+  _borrow() {
+    const { book } = this._s;
+    if (!book?.status) return;
+    this._close();
+    setTimeout(() => BookPopup.show(book), 200);
+  },
+
+  _close() {
+    if (!this._s) return;
+    Utils.closeSheet(this._s.overlay, this._s.modal);
+    this._s = null;
+  },
+};
+
+
+// ─────────────────────────────────────────────
+// BOOK RATING VIEW  — xem đánh giá của 1 quyển
+// ─────────────────────────────────────────────
+const BookRatingView = {
+  show(book, data) {
+    const { overlay, modal } = Utils.createSheet('bpop-overlay', 'bpop-modal', () => this._close());
+    this._overlay = overlay;
+
+    const stars = n => '★'.repeat(n) + '☆'.repeat(5 - n);
+    const myRating = data.myRating;
+
+    const reviewsHtml = data.reviews.length
+      ? data.reviews.map(r => `
+          <div class="brv-review">
+            <div class="brv-review-head">
+              <span class="brv-reviewer">${r.userName}</span>
+              <span class="brv-review-stars">${stars(r.stars)}</span>
+              <span class="brv-review-date">${r.date?.slice(0,10) || ''}</span>
+            </div>
+            ${r.comment ? `<div class="brv-comment">${r.comment}</div>` : ''}
+          </div>`).join('')
+      : '<p class="brv-empty">Chưa có đánh giá nào</p>';
+
+    modal.innerHTML = `
+      <div class="bpop-handle"></div>
+      <div class="brv-header">
+        <div class="brv-title">${book.title}</div>
+        <div class="brv-author">${book.author}</div>
+        <div class="brv-summary">
+          <span class="brv-avg-stars">${stars(Math.round(data.avg))}</span>
+          <span class="brv-avg-num">${data.avg.toFixed(1)}</span>
+          <span class="brv-count">${data.count} đánh giá</span>
+        </div>
+      </div>
+
+      ${myRating ? `
+        <div class="brv-my-rating">
+          <span class="brv-my-label">Đánh giá của bạn:</span>
+          <span class="brv-my-stars">${stars(myRating.stars)}</span>
+          ${myRating.comment ? `<span class="brv-my-comment">"${myRating.comment}"</span>` : ''}
+        </div>` : ''}
+
+      <div class="brv-reviews-label">Tất cả đánh giá</div>
+      <div class="brv-reviews">${reviewsHtml}</div>
+
+      <div class="brv-footer">
+        <button class="rconf-btn-cancel" onclick="BookRatingView._close()">Đóng</button>
+      </div>`;
+
+    Utils.openSheet(overlay, modal);
+  },
+
+  _close() {
+    if (!this._overlay) return;
+    Utils.closeSheet(this._overlay, this._overlay.querySelector('.bpop-modal'));
+    this._overlay = null;
   },
 };
 
@@ -1307,16 +1739,18 @@ document.addEventListener('click', e => {
 // INIT  — fetch in parallel, render once ready
 // ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  // Fire layout + book list + user data concurrently
+  // Fire layout + borrows + user data concurrently
   const [, , borrows] = await Promise.allSettled([
-    LayoutRenderer.init(),                // starts its own async chain
-    Utils.fetchJSON('/get-booklist').then(d => { AppState.books = d; }),
+    LayoutRenderer.init(),
+    Books.load(),                // fetches books + categories + ratings → render
     Utils.fetchJSON('/my-borrows'),
     Booking.loadMyBookings(),
   ]);
 
-  // myBorrows must be set BEFORE first Books.render() so quota is accurate
+  // myBorrows must be set BEFORE quota bar is accurate
   if (borrows.status === 'fulfilled') AppState.myBorrows = borrows.value;
+  // Re-render with accurate borrow quota (Books.load already rendered once,
+  // this second call ensures quota bar reflects the fetched borrows)
   Books.render();
 
   // Start IoT sensor polling
