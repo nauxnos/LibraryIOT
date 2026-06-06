@@ -594,6 +594,155 @@ def get_all_ratings():
     except Exception as e:
         return jsonify([])   # graceful — table may not exist yet
 
+
+# ═══════════════════════════════════════════════════
+# EMAIL NOTIFICATION  (Gmail SMTP, admin-triggered)
+# ═══════════════════════════════════════════════════
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+def _send_email(to_email: str, subject: str, html_body: str) -> bool:
+    """Send a single email via Gmail SMTP. Returns True on success."""
+    gmail_user = os.getenv("GMAIL_USER", "")
+    gmail_pass = os.getenv("GMAIL_APP_PASSWORD", "")
+    if not gmail_user or not gmail_pass:
+        print("[Email] GMAIL_USER or GMAIL_APP_PASSWORD not set in .env")
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = f"Thư Viện Số <{gmail_user}>"
+        msg["To"]      = to_email
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+            server.login(gmail_user, gmail_pass)
+            server.sendmail(gmail_user, to_email, msg.as_string())
+        print(f"[Email] Sent to {to_email}: {subject}")
+        return True
+    except Exception as e:
+        print(f"[Email] Error sending to {to_email}: {e}")
+        return False
+
+
+def _email_template(title: str, body_html: str) -> str:
+    """Wrap content in a simple HTML email template."""
+    return f"""<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f5f3ef;font-family:Arial,sans-serif">
+  <div style="max-width:520px;margin:32px auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
+    <div style="background:#2D5A3D;padding:24px 28px">
+      <h1 style="margin:0;color:#fff;font-size:20px;font-weight:600">📚 Thư Viện Số</h1>
+    </div>
+    <div style="padding:28px">
+      <h2 style="margin:0 0 16px;color:#1a1814;font-size:18px">{title}</h2>
+      {body_html}
+    </div>
+    <div style="background:#f5f3ef;padding:14px 28px;font-size:12px;color:#888">
+      Email tự động từ hệ thống Thư Viện Số. Vui lòng không trả lời email này.
+    </div>
+  </div>
+</body></html>"""
+
+
+@app.route("/send-email", methods=["POST"])
+@admin_required
+def send_email_route():
+    """Admin gửi email thông báo.
+    Body: { type: 'overdue'|'due_soon'|'custom', borrowIds?: [...], to?: str, subject?: str, message?: str }
+    """
+    try:
+        data     = request.get_json()
+        email_type = data.get("type", "custom")
+        results  = {"sent": 0, "failed": 0, "errors": []}
+
+        if email_type in ("overdue", "due_soon"):
+            # Gửi hàng loạt cho các lượt mượn sắp/đã quá hạn
+            borrow_ids = data.get("borrowIds", [])
+            borrows = dbHandler.getAllBorrows()
+            now     = datetime.now()
+
+            targets = []
+            for b in borrows:
+                if b["returnedAt"]:
+                    continue   # đã trả rồi
+                if borrow_ids and b["borrowId"] not in borrow_ids:
+                    continue   # chỉ lọc theo id nếu được truyền vào
+                try:
+                    due_dt = datetime.strptime(b["due"], "%d/%m/%Y")
+                except Exception:
+                    continue
+                days_left = (due_dt - now).days
+
+                if email_type == "overdue" and days_left >= 0:
+                    continue   # chưa quá hạn
+                if email_type == "due_soon" and not (0 <= days_left <= 3):
+                    continue   # không trong window 3 ngày
+
+                targets.append({**b, "daysLeft": days_left, "dueDt": due_dt})
+
+            if not targets:
+                return jsonify({"success": True, "message": "Không có lượt mượn nào phù hợp.", **results})
+
+            for b in targets:
+                days_left = b["daysLeft"]
+                if email_type == "overdue":
+                    overdue_days = abs(days_left)
+                    subject  = f"[Thư Viện] Sách quá hạn {overdue_days} ngày — {b['title']}"
+                    body_html = f"""
+                        <p style="color:#555;line-height:1.7">Xin chào <strong>{b['userName']}</strong>,</p>
+                        <p style="color:#555;line-height:1.7">Bạn đang mượn cuốn sách dưới đây đã <strong style="color:#c0392b">quá hạn {overdue_days} ngày</strong>:</p>
+                        <div style="background:#fdf3f3;border-left:4px solid #c0392b;padding:14px 18px;border-radius:6px;margin:16px 0">
+                          <div style="font-size:16px;font-weight:600;color:#1a1814">{b['title']}</div>
+                          <div style="color:#888;margin-top:4px">{b['author']}</div>
+                          <div style="color:#c0392b;margin-top:8px;font-size:14px">⚠️ Hạn trả: {b['due']}</div>
+                        </div>
+                        <p style="color:#555;line-height:1.7">Vui lòng mang sách đến thư viện để trả sớm nhất có thể.</p>"""
+                else:
+                    subject   = f"[Thư Viện] Sách sắp hết hạn sau {days_left} ngày — {b['title']}"
+                    body_html = f"""
+                        <p style="color:#555;line-height:1.7">Xin chào <strong>{b['userName']}</strong>,</p>
+                        <p style="color:#555;line-height:1.7">Sách bạn đang mượn sẽ <strong style="color:#c8a96e">hết hạn sau {days_left} ngày</strong>:</p>
+                        <div style="background:#fdf8ee;border-left:4px solid #c8a96e;padding:14px 18px;border-radius:6px;margin:16px 0">
+                          <div style="font-size:16px;font-weight:600;color:#1a1814">{b['title']}</div>
+                          <div style="color:#888;margin-top:4px">{b['author']}</div>
+                          <div style="color:#c8a96e;margin-top:8px;font-size:14px">📅 Hạn trả: {b['due']}</div>
+                        </div>
+                        <p style="color:#555;line-height:1.7">Nếu cần thêm thời gian, bạn có thể gia hạn qua hệ thống hoặc liên hệ thủ thư.</p>"""
+
+                ok = _send_email(b["email"], subject,
+                                 _email_template(subject, body_html))
+                if ok: results["sent"] += 1
+                else:
+                    results["failed"] += 1
+                    results["errors"].append(b["email"])
+
+        elif email_type == "custom":
+            # Gửi email tự do đến 1 địa chỉ
+            to      = data.get("to", "").strip()
+            subject = data.get("subject", "Thông báo từ Thư Viện").strip()
+            message = data.get("message", "").strip()
+            if not to or not message:
+                return jsonify({"success": False, "error": "MissingFields"})
+            body_html = f"<p style='color:#555;line-height:1.8;white-space:pre-wrap'>{message}</p>"
+            ok = _send_email(to, subject, _email_template(subject, body_html))
+            if ok: results["sent"] = 1
+            else:  results["failed"] = 1
+
+        else:
+            return jsonify({"success": False, "error": "UnknownType"})
+
+        return jsonify({
+            "success": results["failed"] == 0,
+            "message": f"Đã gửi {results['sent']} email" + (f", lỗi {results['failed']}" if results["failed"] else ""),
+            **results
+        })
+
+    except Exception as e:
+        print(f"send-email error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
 @app.errorhandler(404)
 def not_found(e):
     return render_template("login.html"), 404

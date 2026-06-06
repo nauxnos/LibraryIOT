@@ -120,6 +120,12 @@
           </svg>
           <span>Thống Kê</span>
         </button>
+        <div class="nav-item" onclick="Navigation.showSection('email', this)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="2" y="4" width="20" height="16" rx="3"/><path d="m2 7 10 7 10-7"/>
+        </svg>
+          <span>Email</span>
+        </div>
       </nav>
       
       <div class="sidebar-footer">
@@ -474,6 +480,83 @@
           <div id="chart-dow"></div>
         </div>
       </section>
+      <section id="section-email" class="admin-section">
+  <div class="section-header">
+    <h2 class="section-title">Gửi Email Thông Báo</h2>
+    <p class="section-sub">Gửi nhắc nhở hàng loạt hoặc email tự do đến người dùng</p>
+  </div>
+ 
+  <!-- Stats row -->
+  <div class="em-stats-row">
+    <div class="em-stat-card">
+      <div class="em-stat-num" id="em-count-active">—</div>
+      <div class="em-stat-label">Đang mượn</div>
+    </div>
+    <div class="em-stat-card em-stat-warn">
+      <div class="em-stat-num" id="em-count-soon">—</div>
+      <div class="em-stat-label">Sắp hết hạn (≤3 ngày)</div>
+    </div>
+    <div class="em-stat-card em-stat-danger">
+      <div class="em-stat-num" id="em-count-overdue">—</div>
+      <div class="em-stat-label">Quá hạn</div>
+    </div>
+  </div>
+ 
+  <!-- Bulk: Quá hạn -->
+  <div class="em-block">
+    <div class="em-block-head">
+      <div>
+        <div class="em-block-title">⚠️ Sách quá hạn</div>
+        <div class="em-block-sub">Gửi nhắc nhở đến tất cả người dùng đang giữ sách quá hạn trả</div>
+      </div>
+      <button class="em-bulk-btn em-bulk-danger" id="em-btn-overdue"
+        onclick="Email.sendBulk('overdue')">Gửi tất cả quá hạn</button>
+    </div>
+    <div class="em-list" id="em-list-overdue">
+      <div class="em-empty">Đang tải...</div>
+    </div>
+  </div>
+ 
+  <!-- Bulk: Sắp hết hạn -->
+  <div class="em-block">
+    <div class="em-block-head">
+      <div>
+        <div class="em-block-title">📅 Sắp hết hạn</div>
+        <div class="em-block-sub">Gửi nhắc nhở đến người dùng có sách hết hạn trong 3 ngày tới</div>
+      </div>
+      <button class="em-bulk-btn em-bulk-warn" id="em-btn-due_soon"
+        onclick="Email.sendBulk('due_soon')">Gửi tất cả sắp hạn</button>
+    </div>
+    <div class="em-list" id="em-list-soon">
+      <div class="em-empty">Đang tải...</div>
+    </div>
+  </div>
+ 
+  <!-- Custom email -->
+  <div class="em-block">
+    <div class="em-block-title">✉️ Gửi email tự do</div>
+    <div class="em-block-sub" style="margin-bottom:14px">Soạn và gửi email đến bất kỳ địa chỉ nào</div>
+    <div class="em-form">
+      <div class="em-form-row">
+        <label class="em-label">Gửi đến</label>
+        <input class="em-input" id="em-to" type="email" placeholder="user@email.com">
+      </div>
+      <div class="em-form-row">
+        <label class="em-label">Tiêu đề</label>
+        <input class="em-input" id="em-subject" type="text"
+          placeholder="Thông báo từ Thư Viện" value="Thông báo từ Thư Viện Số">
+      </div>
+      <div class="em-form-row">
+        <label class="em-label">Nội dung</label>
+        <textarea class="em-textarea" id="em-message" rows="4"
+          placeholder="Nhập nội dung email..."></textarea>
+      </div>
+      <button class="em-send-btn" id="em-btn-custom" onclick="Email.sendCustom()">
+        Gửi email
+      </button>
+    </div>
+  </div>
+</section>
     </div>
   </div>
 

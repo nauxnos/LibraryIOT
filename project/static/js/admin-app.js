@@ -75,6 +75,7 @@ const Navigation = {
        schedule:   () => Schedule.load(),
        categories: () => Categories.load(),
        statistics: () => Statistics.load(),
+       email:      () => Email.init(),
     })[section]?.();
   },
 };
@@ -1180,3 +1181,134 @@ document.addEventListener('DOMContentLoaded', () => {
   Books.loadList();
   Accounts.loadList();
 });
+
+// ═══════════════════════════════════════════════════
+// EMAIL  — admin gửi thông báo
+// ═══════════════════════════════════════════════════
+const Email = {
+  _borrows: [],
+
+  async init() {
+    await this._loadBorrows();
+    this._render();
+  },
+
+  async _loadBorrows() {
+    try {
+      const all = await Utils.fetchJSON('/get-activity-log');
+      // Chỉ lấy các lượt mượn chưa trả
+      this._borrows = all.filter(e => e.type === 'book_borrow' && e.active);
+    } catch { this._borrows = []; }
+  },
+
+  _render() {
+    const now  = new Date();
+    const over = this._borrows.filter(b => {
+      const due = this._parseDue(b.subDetail);
+      return due && due < now;
+    });
+    const soon = this._borrows.filter(b => {
+      const due = this._parseDue(b.subDetail);
+      if (!due || due < now) return false;
+      const days = Math.ceil((due - now) / 86400000);
+      return days <= 3;
+    });
+
+    // Stats
+    this._set('em-count-active',  this._borrows.length);
+    this._set('em-count-overdue', over.length);
+    this._set('em-count-soon',    soon.length);
+
+    // Render borrow list
+    this._renderList('em-list-overdue', over,  'overdue');
+    this._renderList('em-list-soon',    soon,  'due_soon');
+    this._renderList('em-list-active',  this._borrows, 'single');
+  },
+
+  _renderList(containerId, items, mode) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    if (!items.length) {
+      el.innerHTML = '<div class="em-empty">Không có mục nào</div>';
+      return;
+    }
+    el.innerHTML = items.map(b => {
+      const due = this._parseDue(b.subDetail);
+      const now = new Date();
+      const daysLeft = due ? Math.ceil((due - now) / 86400000) : null;
+      const dueTxt   = due ? due.toLocaleDateString('vi-VN') : '—';
+      const badge    = daysLeft !== null
+        ? daysLeft < 0
+          ? `<span class="em-badge em-badge-over">Quá ${Math.abs(daysLeft)} ngày</span>`
+          : `<span class="em-badge em-badge-soon">Còn ${daysLeft} ngày</span>`
+        : '';
+      return `<div class="em-row">
+        <div class="em-row-info">
+          <div class="em-row-name">${b.userName}</div>
+          <div class="em-row-book">${b.detail}</div>
+          <div class="em-row-meta">${b.email} · Hạn: ${dueTxt} ${badge}</div>
+        </div>
+        <button class="em-row-btn" onclick="Email._sendSingle('${b.email}','${b.userName}','${b.detail}','${dueTxt}','${mode === 'overdue' ? 'overdue' : 'due_soon'}')">
+          Gửi mail
+        </button>
+      </div>`;
+    }).join('');
+  },
+
+  // Gửi hàng loạt
+  async sendBulk(type) {
+    const btn = document.getElementById(`em-btn-${type}`);
+    if (btn) { btn.disabled = true; btn.textContent = 'Đang gửi...'; }
+    try {
+      const res = await Utils.post('/send-email', { type });
+      Utils.showToast(res.message || (res.success ? 'Đã gửi!' : 'Lỗi gửi mail'), res.success ? 'success' : 'error');
+    } catch { Utils.showToast('Lỗi kết nối', 'error'); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = type === 'overdue' ? 'Gửi tất cả quá hạn' : 'Gửi tất cả sắp hạn'; } }
+  },
+
+  // Gửi 1 email tới người cụ thể
+  async _sendSingle(email, name, book, due, type) {
+    try {
+      const res = await Utils.post('/send-email', {
+        type,
+        to: email,
+        subject: type === 'overdue'
+          ? `[Thư Viện] Sách quá hạn — ${book}`
+          : `[Thư Viện] Sách sắp hết hạn — ${book}`,
+      });
+      Utils.showToast(res.success ? `Đã gửi tới ${email}` : 'Lỗi gửi mail', res.success ? 'success' : 'error');
+    } catch { Utils.showToast('Lỗi kết nối', 'error'); }
+  },
+
+  // Gửi email tự do
+  async sendCustom() {
+    const to      = document.getElementById('em-to')?.value.trim();
+    const subject = document.getElementById('em-subject')?.value.trim();
+    const message = document.getElementById('em-message')?.value.trim();
+    if (!to || !message) { Utils.showToast('Nhập email và nội dung', 'error'); return; }
+    const btn = document.getElementById('em-btn-custom');
+    if (btn) { btn.disabled = true; btn.textContent = 'Đang gửi...'; }
+    try {
+      const res = await Utils.post('/send-email', { type: 'custom', to, subject, message });
+      if (res.success) {
+        Utils.showToast('Đã gửi email!', 'success');
+        document.getElementById('em-to').value = '';
+        document.getElementById('em-subject').value = '';
+        document.getElementById('em-message').value = '';
+      } else {
+        Utils.showToast('Lỗi: ' + (res.error || 'không rõ'), 'error');
+      }
+    } catch { Utils.showToast('Lỗi kết nối', 'error'); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = 'Gửi email'; } }
+  },
+
+  _parseDue(subDetail) {
+    // subDetail dạng "Hạn trả: 15/06/2026"
+    const m = subDetail?.match(/(\d{2}\/\d{2}\/\d{4})/);
+    if (!m) return null;
+    const [d, mo, y] = m[1].split('/');
+    return new Date(+y, +mo - 1, +d);
+  },
+
+  _set(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; },
+};
