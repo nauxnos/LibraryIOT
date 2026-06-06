@@ -38,16 +38,106 @@ class HardwareHandler:
     # ── Đọc khoảng cách tất cả ghế ─────────────────────────────────────────────
     def getDistance(self):
         """Trả về [(seatID, distance_cm | None)]"""
+        thresholds = self._loadThresholds()
         result = []
         for sensor in self.lstSR04Sensors:
             dist = sensor.measure()
-            sensor.updateLED(dist)
+            # Truyền threshold vào updateLED — bật đèn khi có người trong ngưỡng
+            threshold = thresholds.get(sensor.unSeatID, 50)
+            sensor.updateLED(dist, threshold)
             result.append((sensor.unSeatID, dist))
         return result
 
     # ── Đọc thẻ RFID ────────────────────────────────────────────────────────────
     def readCard(self):
         return self.objRC522Sensor.readCard()
+
+    # ── Xử lý RFID: mượn sách (pending) + trả sách (tự động) ────────────────
+    def handleRfid(self, uid: int):
+        """
+        Gọi mỗi khi Pi đọc được tag RFID.
+        uid: số nguyên từ RC522Sensor.readCard()
+
+        Flow mượn:
+          - Chuyển uid → rfidUID string
+          - Tìm sách có RfidUID khớp
+          - Nếu sách có pending_borrow → hoàn tất mượn → ghi rfid_result
+        Flow trả:
+          - Nếu sách đang được mượn và KHÔNG có pending → tự động trả
+        """
+        try:
+            from app import pending_borrow, rfid_result, _pending_lock, dbHandler as _db
+            from datetime import datetime, timedelta
+        except ImportError:
+            return
+
+        # Chuyển uid thành hex string cho dễ đọc
+        rfid_uid = format(uid, '08X')   # ví dụ: "ABCDEF12"
+
+        # Tìm sách theo RfidUID
+        book = _db.getBookByRfid(rfid_uid)
+        if not book:
+            print(f"[RFID] Tag {rfid_uid} chưa đăng ký cho sách nào")
+            return
+
+        book_id = book["id"]
+        now     = datetime.now().timestamp()
+
+        with _pending_lock:
+            pending = pending_borrow.get(book_id)
+
+            # ── Có pending → xác nhận mượn ──────────────────────────────────
+            if pending:
+                if now > pending["expires"]:
+                    pending_borrow.pop(book_id, None)
+                    print(f"[RFID] Pending cho sách {book_id} đã hết hạn")
+                    return
+
+                user_id = pending["userId"]
+                due_days = 14
+                start_dt = datetime.now()
+                end_dt   = start_dt + timedelta(days=due_days)
+
+                ok = _db.createBookBorrow(
+                    user_id,
+                    book_id,
+                    start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                    end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                )
+                if ok:
+                    rfid_result[book_id] = {
+                        "success":  True,
+                        "message":  f"Đã mượn: {book['title']}",
+                        "userName": pending["userName"],
+                        "due":      end_dt.strftime("%d/%m/%Y"),
+                    }
+                    print(f"[RFID] Mượn OK: {book['title']} → {pending['userName']}")
+                else:
+                    rfid_result[book_id] = {
+                        "success": False,
+                        "message": "Mượn thất bại (sách không khả dụng)",
+                    }
+                return
+
+            # ── Không có pending → thử tự động trả ─────────────────────────
+            active = _db.getActiveBorrowByBook(book_id)
+            if active:
+                returned_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                ok = _db.returnBook(active["borrowId"], returned_at)
+                if ok:
+                    print(f"[RFID] Trả OK: {book['title']} ← {active['userName']}")
+                    # Ghi vào rfid_result để frontend biết (polling /borrow-status)
+                    rfid_result[book_id] = {
+                        "success":    True,
+                        "message":    f"Đã trả: {book['title']}",
+                        "userName":   active["userName"],
+                        "returnedAt": returned_at,
+                        "isReturn":   True,
+                    }
+                else:
+                    print(f"[RFID] Trả thất bại: {book['title']}")
+            else:
+                print(f"[RFID] Sách {book['title']} không có lượt mượn active")
 
     # ── Ghi thẳng vào presence_state của app.py ────────────────────────────────
     def pushPresence(self, readings):

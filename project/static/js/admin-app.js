@@ -761,6 +761,10 @@ const Books = {
         <td>
           <button class="action-btn edit"   onclick="Books.edit(${b.id})">✏️ Sửa</button>
           <button class="action-btn delete" onclick="Books.delete(${b.id})">🗑️ Xóa</button>
+          <button class="action-btn view"   onclick="Books.registerRfid(${b.id}, '${b.title}')"
+            title="${b.rfidUid ? '📡 ' + b.rfidUid : 'Chưa đăng ký RFID'}">
+            ${b.rfidUid ? '📡' : '➕'} RFID
+          </button>
         </td>
       </tr>`).join('');
   },
@@ -779,6 +783,21 @@ const Books = {
   openModal() { this._openModal(); },
   edit(id)    { this._openModal(AppState.adminBooks.find(b => b.id === id)); },
   closeModal(){ document.getElementById('book-id').disabled = false; document.getElementById('book-modal').classList.remove('active'); },
+
+
+  async registerRfid(bookId, title) {
+    const uid = prompt(`Nhập RfidUID cho sách "${title}"\n(Quẹt thẻ tag hoặc nhập thủ công hex, ví dụ: ABCDEF12)`);
+    if (!uid) return;
+    try {
+      const res = await Utils.post('/register-book-rfid', { bookId, rfidUid: uid.trim().toUpperCase() });
+      if (res.success) {
+        Utils.showToast(`Đã đăng ký RFID cho "${title}"`, 'success');
+        await this.loadList();
+      } else {
+        Utils.showToast('Đăng ký thất bại', 'error');
+      }
+    } catch { Utils.showToast('Lỗi kết nối', 'error'); }
+  },
 
   filter: Utils.debounce(function() {
     const q = document.getElementById('book-search').value.toLowerCase();
@@ -823,7 +842,6 @@ const Accounts = {
     try {
       AppState.adminAccounts = await Utils.fetchJSON('/get-accountlist');
       this._render();
-      Dashboard.refresh();
     } catch(e) { console.error('loadList:', e); }
   },
 
@@ -1177,9 +1195,9 @@ document.addEventListener('click', e => {
 // INIT
 // ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // Chỉ load dashboard lúc khởi động
+  // Books/Accounts/Schedule load lazy khi user vào tab
   Dashboard.refresh();
-  Books.loadList();
-  Accounts.loadList();
 });
 
 // ═══════════════════════════════════════════════════

@@ -1096,7 +1096,7 @@ const Books = {
 
   openBorrow(bookId) {
     const book = AppState.books.find(b => b.id === bookId);
-    if (book?.status) BookPopup.show(book);
+    if (book?.status) RfidBorrow.start(book);
   },
 
   async openDetail(bookId) {
@@ -1511,7 +1511,7 @@ const BookDetail = {
     const { book } = this._s;
     if (!book?.status) return;
     this._close();
-    setTimeout(() => BookPopup.show(book), 200);
+    setTimeout(() => RfidBorrow.start(book), 200);
   },
 
   _close() {
@@ -1578,6 +1578,153 @@ const BookRatingView = {
     if (!this._overlay) return;
     Utils.closeSheet(this._overlay, this._overlay.querySelector('.bpop-modal'));
     this._overlay = null;
+  },
+};
+
+
+// ─────────────────────────────────────────────
+// RFID BORROW  — pending + polling
+// ─────────────────────────────────────────────
+const RfidBorrow = {
+  _timer:  null,
+  _bookId: null,
+  _modal:  null,
+  _overlay: null,
+
+  async start(book) {
+    // Gọi /start-borrow trước
+    let res;
+    try {
+      res = await Utils.post('/start-borrow', { bookId: book.id });
+    } catch {
+      Utils.showToast('Lỗi kết nối server', 'error'); return;
+    }
+    if (!res.success) {
+      const msgs = {
+        BorrowLimit:    'Bạn đang mượn tối đa 3 quyển',
+        BookUnavailable:'Sách hiện không khả dụng',
+        UserNotFound:   'Không tìm thấy tài khoản',
+      };
+      Utils.showToast(msgs[res.error] || 'Không thể mượn sách', 'error');
+      return;
+    }
+
+    this._bookId = book.id;
+    this._showSheet(book, res.expires);
+    this._poll();
+  },
+
+  _showSheet(book, expires) {
+    const { overlay, modal } = Utils.createSheet('rfid-overlay', 'rfid-modal', () => this.cancel());
+    this._overlay = overlay;
+    this._modal   = modal;
+
+    const color    = Books.COLORS[AppState.books.findIndex(b => b.id === book.id) % 8] || '#EAF3DE';
+    const initials = book.title.split(' ').slice(0,2).map(w => w[0]?.toUpperCase()||'').join('');
+
+    modal.innerHTML = `
+      <div class="rfid-handle"></div>
+      <div class="rfid-cover" style="background:${color}">
+        <span class="rfid-cover-init">${initials}</span>
+      </div>
+      <div class="rfid-body">
+        <div class="rfid-book-title">${book.title}</div>
+        <div class="rfid-book-author">${book.author}</div>
+
+        <div class="rfid-state" id="rfid-state">
+          <div class="rfid-spinner"></div>
+          <div class="rfid-state-text">Đặt sách lên đầu đọc RFID</div>
+          <div class="rfid-countdown" id="rfid-countdown"></div>
+        </div>
+      </div>
+      <div class="rfid-footer">
+        <button class="rfid-cancel-btn" onclick="RfidBorrow.cancel()">Hủy</button>
+      </div>`;
+
+    Utils.openSheet(overlay, modal);
+    this._startCountdown(expires);
+  },
+
+  _startCountdown(expires) {
+    const el = document.getElementById('rfid-countdown');
+    const tick = () => {
+      if (!el || !document.body.contains(el)) return;
+      const left = Math.max(0, expires - Math.floor(Date.now() / 1000));
+      el.textContent = `Còn ${left}s`;
+      if (left > 0) setTimeout(tick, 1000);
+    };
+    tick();
+  },
+
+  _poll() {
+    this._timer = setInterval(async () => {
+      if (!this._bookId) return this._stopPoll();
+      try {
+        const res = await Utils.fetchJSON(`/borrow-status?book_id=${this._bookId}`);
+
+        if (res.status === 'done') {
+          this._stopPoll();
+          if (res.success) {
+            this._showSuccess(res);
+          } else {
+            this._close();
+            Utils.showToast(res.message || 'Mượn thất bại', 'error');
+          }
+        } else if (res.status === 'timeout' || res.status === 'idle') {
+          this._stopPoll();
+          this._showTimeout();
+        }
+      } catch { /* silent */ }
+    }, 2000);
+  },
+
+  _showSuccess(res) {
+    const el = document.getElementById('rfid-state');
+    if (!el) return;
+    el.innerHTML = `
+      <div class="rfid-success-icon">✓</div>
+      <div class="rfid-state-text rfid-success-text">Xác nhận thành công!</div>
+      <div class="rfid-due-text">Hạn trả: <strong>${res.due}</strong></div>`;
+    // Refresh books + đóng sau 2.5s
+    setTimeout(async () => {
+      AppState.myBorrows = await Utils.fetchJSON('/my-borrows').catch(() => AppState.myBorrows);
+      const lb = AppState.books.find(b => b.id === this._bookId);
+      if (lb) lb.status = false;
+      Books.render();
+      this._close();
+      Utils.showToast(`Đã mượn — hạn trả ${res.due}`, 'success');
+    }, 2500);
+  },
+
+  _showTimeout() {
+    const el = document.getElementById('rfid-state');
+    if (!el) return;
+    el.innerHTML = `
+      <div class="rfid-timeout-icon">⏱</div>
+      <div class="rfid-state-text rfid-timeout-text">Hết thời gian chờ</div>
+      <div style="font-size:12px;color:var(--text-3);margin-top:4px">Vui lòng thử lại</div>`;
+    setTimeout(() => this._close(), 2000);
+  },
+
+  async cancel() {
+    this._stopPoll();
+    if (this._bookId) {
+      await Utils.post('/cancel-pending-borrow', { bookId: this._bookId }).catch(() => {});
+    }
+    this._close();
+  },
+
+  _stopPoll() {
+    clearInterval(this._timer);
+    this._timer = null;
+  },
+
+  _close() {
+    if (!this._overlay) return;
+    Utils.closeSheet(this._overlay, this._modal);
+    this._overlay = null;
+    this._modal   = null;
+    this._bookId  = null;
   },
 };
 

@@ -596,6 +596,131 @@ def get_all_ratings():
 
 
 # ═══════════════════════════════════════════════════
+# RFID BORROW/RETURN  — pending state + polling
+# ═══════════════════════════════════════════════════
+import threading
+
+# pending_borrow: { bookId: {userId, userName, expires} }
+# Tạo khi user bấm "Mượn" trên web, xóa khi Pi xác nhận hoặc timeout
+pending_borrow = {}
+_pending_lock  = threading.Lock()
+
+# rfid_result: { bookId: {success, message, userName, due} }
+# Pi ghi vào đây sau khi xác nhận, frontend polling đọc
+rfid_result = {}
+
+
+@app.route("/start-borrow", methods=["POST"])
+@login_required
+def start_borrow():
+    """
+    Bước 1: User bấm Mượn trên web.
+    Tạo pending entry, chờ Pi quẹt RFID trong 60 giây.
+    """
+    try:
+        data    = request.get_json()
+        book_id = data.get("bookId")
+        if not book_id:
+            return jsonify({"success": False, "error": "MissingFields"})
+
+        user_id  = dbHandler.getUserIdByEmail(session["user"]["email"])
+        if not user_id:
+            return jsonify({"success": False, "error": "UserNotFound"})
+        if dbHandler.countActiveBorrows(user_id) >= 3:
+            return jsonify({"success": False, "error": "BorrowLimit"})
+
+        book = next((b for b in dbHandler.getAllBooks() if b["id"] == book_id), None)
+        if not book or not book["status"]:
+            return jsonify({"success": False, "error": "BookUnavailable"})
+
+        expires = datetime.now().timestamp() + 60   # 60 giây timeout
+
+        with _pending_lock:
+            pending_borrow[book_id] = {
+                "userId":   user_id,
+                "userName": session["user"]["name"],
+                "expires":  expires,
+            }
+            # Xóa kết quả cũ nếu có
+            rfid_result.pop(book_id, None)
+
+        return jsonify({"success": True, "expires": int(expires)})
+
+    except Exception as e:
+        print(f"start-borrow error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
+
+@app.route("/borrow-status")
+@login_required
+def borrow_status():
+    """
+    Bước 2: Frontend polling mỗi 2s để biết Pi đã xác nhận chưa.
+    """
+    try:
+        book_id = request.args.get("book_id", type=int)
+        if not book_id:
+            return jsonify({"status": "error"})
+
+        now = datetime.now().timestamp()
+
+        # Có kết quả từ Pi chưa?
+        with _pending_lock:
+            result = rfid_result.get(book_id)
+            if result:
+                rfid_result.pop(book_id, None)
+                pending_borrow.pop(book_id, None)
+                return jsonify({"status": "done", **result})
+
+            # Còn pending không?
+            pending = pending_borrow.get(book_id)
+            if not pending:
+                return jsonify({"status": "idle"})
+            if now > pending["expires"]:
+                pending_borrow.pop(book_id, None)
+                return jsonify({"status": "timeout"})
+
+        return jsonify({
+            "status":      "waiting",
+            "secondsLeft": int(pending["expires"] - now),
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error"})
+
+
+@app.route("/cancel-pending-borrow", methods=["POST"])
+@login_required
+def cancel_pending_borrow():
+    """User hủy chờ RFID."""
+    try:
+        book_id = request.get_json().get("bookId")
+        with _pending_lock:
+            pending_borrow.pop(book_id, None)
+            rfid_result.pop(book_id, None)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False})
+
+
+@app.route("/register-book-rfid", methods=["POST"])
+@admin_required
+def register_book_rfid():
+    """Admin đăng ký RfidUID cho sách (quẹt tag 1 lần)."""
+    try:
+        data     = request.get_json()
+        book_id  = data.get("bookId")
+        rfid_uid = data.get("rfidUid", "").strip()
+        if not book_id or not rfid_uid:
+            return jsonify({"success": False, "error": "MissingFields"})
+        if dbHandler.setBookRfid(book_id, rfid_uid):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "BookNotFound"})
+    except Exception as e:
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
+
+# ═══════════════════════════════════════════════════
 # EMAIL NOTIFICATION  (Gmail SMTP, admin-triggered)
 # ═══════════════════════════════════════════════════
 import smtplib

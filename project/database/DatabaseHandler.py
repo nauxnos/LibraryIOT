@@ -136,11 +136,12 @@ class DatabaseHandler:
     def getAllBooks(self) -> List[Dict[str, Any]]:
         """Get all books"""
         with self.get_cursor() as cursor:
-            cursor.execute("SELECT BookID, BookName, Author, Status, BorrowedCount FROM Book")
+            cursor.execute("SELECT BookID, BookName, Author, Status, BorrowedCount, RfidUID FROM Book")
             return [
                 {
                     "id": row[0], "title": row[1], "author": row[2],
-                    "status": bool(row[3]), "borrowedCount": row[4]
+                    "status": bool(row[3]), "borrowedCount": row[4],
+                    "rfidUid": row[5] or "",
                 }
                 for row in cursor.fetchall()
             ]
@@ -732,6 +733,41 @@ class DatabaseHandler:
                 "daily": {"seat": daily_seat, "book": daily_book},
             }
 
+
+
+    def setBookRfid(self, book_id: int, rfid_uid: str) -> bool:
+        """Gán RfidUID cho sách (admin đăng ký tag)."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE Book SET RfidUID = ? WHERE BookID = ?",
+                (rfid_uid.strip(), book_id)
+            )
+            return cursor.rowcount > 0
+
+    def getBookByRfid(self, rfid_uid: str) -> Optional[Dict]:
+        """Tìm sách theo RfidUID — dùng khi Pi quẹt tag."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT BookID, BookName, Author, Status FROM Book WHERE RfidUID = ?",
+                (rfid_uid.strip(),)
+            )
+            row = cursor.fetchone()
+            if not row: return None
+            return {"id": row[0], "title": row[1], "author": row[2], "status": bool(row[3])}
+
+    def getActiveBorrowByBook(self, book_id: int) -> Optional[Dict]:
+        """Tìm lượt mượn đang active của sách — dùng khi tự động trả qua RFID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT bm.BookBorrowID, u.UserName, u.Email
+                FROM BookManager bm
+                JOIN User u ON bm.UserID = u.UserID
+                WHERE bm.BookID = ? AND bm.ReturnedAt IS NULL
+                ORDER BY bm.StartTime DESC LIMIT 1
+            """, (book_id,))
+            row = cursor.fetchone()
+            if not row: return None
+            return {"borrowId": row[0], "userName": row[1], "email": row[2]}
 
     # ===== HELPERS =====
 

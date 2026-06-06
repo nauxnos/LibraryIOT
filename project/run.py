@@ -59,7 +59,8 @@ def run_hardware():
 
                 card = handler.readCard()
                 if card:
-                    log.info(f"Card: {card}")
+                    log.info(f"Card UID: {format(card, '08X')}")
+                    handler.handleRfid(card)
 
             except Exception as e:
                 log.warning(f"Sensor error: {e}")

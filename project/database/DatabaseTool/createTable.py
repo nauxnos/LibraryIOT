@@ -30,7 +30,8 @@ CREATE TABLE Book (
     BookName TEXT NOT NULL,
     Author TEXT NOT NULL,
     BorrowedCount INTEGER NOT NULL DEFAULT 0,
-    Status INTEGER NOT NULL DEFAULT 1
+    Status INTEGER NOT NULL DEFAULT 1,
+    RfidUID TEXT                          -- UID tag RFID dán trên sách
 );
 
 CREATE TABLE SeatManager (
