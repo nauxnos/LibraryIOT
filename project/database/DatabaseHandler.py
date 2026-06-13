@@ -80,6 +80,15 @@ class DatabaseHandler:
             )
             return cursor.rowcount > 0
 
+    def updateUserPasswordById(self, user_id: int, new_password: str) -> bool:
+        """Admin: update a user's password by user ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE User SET Password = ? WHERE UserID = ?",
+                (new_password, user_id)
+            )
+            return cursor.rowcount > 0
+
     def deleteUser(self, userID: int) -> bool:
         """Delete user by ID (cascades to bookings/borrows)"""
         with self.get_cursor() as cursor:
@@ -94,6 +103,18 @@ class DatabaseHandler:
                 {"id": row[0], "name": row[1], "email": row[2], "created": row[3]}
                 for row in cursor.fetchall()
             ]
+
+    def getUserById(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Get one user by ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT UserID, UserName, Email, CreateDate FROM User WHERE UserID = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {"id": row[0], "name": row[1], "email": row[2], "created": row[3]}
 
     # ===== BOOK OPERATIONS =====
 
@@ -427,6 +448,49 @@ class DatabaseHandler:
                 })
             return result
 
+    def getUserBorrowsHistory(self, user_id: int) -> List[Dict[str, Any]]:
+        """Get all borrow records for a user, including returned books."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT bm.BookBorrowID, b.BookID, b.BookName, b.Author,
+                       bm.StartTime, bm.EndTime, bm.ReturnedAt
+                FROM BookManager bm
+                JOIN Book b ON bm.BookID = b.BookID
+                WHERE bm.UserID = ?
+                ORDER BY bm.StartTime DESC
+            """, (user_id,))
+            result = []
+            now = datetime.now()
+            for row in cursor.fetchall():
+                try:
+                    due_dt = datetime.fromisoformat(row[5])
+                    due = due_dt.strftime("%d/%m/%Y")
+                    overdue = row[6] is None and now > due_dt
+                except Exception:
+                    due, overdue = "—", False
+                try:
+                    borrowed_fmt = datetime.fromisoformat(row[4]).strftime("%d/%m/%Y %H:%M")
+                except Exception:
+                    borrowed_fmt = row[4]
+                try:
+                    returned_fmt = datetime.fromisoformat(row[6]).strftime("%d/%m/%Y %H:%M") if row[6] else ""
+                except Exception:
+                    returned_fmt = row[6] or ""
+                result.append({
+                    "borrowId": row[0],
+                    "bookId": row[1],
+                    "title": row[2],
+                    "author": row[3],
+                    "borrowedAt": row[4],
+                    "borrowedFmt": borrowed_fmt,
+                    "due": due,
+                    "returnedAt": row[6],
+                    "returnedFmt": returned_fmt,
+                    "active": row[6] is None,
+                    "overdue": overdue
+                })
+            return result
+
     def getAllBorrows(self) -> List[Dict[str, Any]]:
         """Get all borrow records with user + book info — for admin activity log"""
         with self.get_cursor() as cursor:
@@ -472,6 +536,40 @@ class DatabaseHandler:
                 })
             return result
 
+    def getTopBorrowedBooks(self, period: str = "week", limit: int = 10) -> List[Dict[str, Any]]:
+        """Get top borrowed books by borrow records for week/month/all."""
+        period_filters = {
+            "week": "datetime('now', '-7 days')",
+            "month": "datetime('now', '-30 days')",
+        }
+        where = ""
+        if period in period_filters:
+            where = f"WHERE bm.StartTime >= {period_filters[period]}"
+
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                SELECT b.BookID, b.BookName, b.Author,
+                       COUNT(bm.BookBorrowID) as borrow_count,
+                       b.BorrowedCount,
+                       b.Status
+                FROM Book b
+                JOIN BookManager bm ON b.BookID = bm.BookID
+                {where}
+                GROUP BY b.BookID, b.BookName, b.Author, b.BorrowedCount, b.Status
+                ORDER BY borrow_count DESC, b.BorrowedCount DESC, b.BookName ASC
+                LIMIT ?
+            """, (limit,))
+            return [
+                {
+                    "id": r[0],
+                    "title": r[1],
+                    "author": r[2],
+                    "periodBorrowCount": r[3],
+                    "borrowedCount": r[4],
+                    "status": bool(r[5]),
+                }
+                for r in cursor.fetchall()
+            ]
 
     # ===== SEAT-BOOK LINK =====
 

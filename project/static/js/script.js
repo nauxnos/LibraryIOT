@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────
+﻿// ─────────────────────────────────────────────
 // STATE
 // ─────────────────────────────────────────────
 const AppState = {
@@ -36,6 +36,12 @@ const Utils = {
   // Convenience POST helper
   post(url, body) {
     return this.fetchJSON(url, { method: 'POST', body: JSON.stringify(body) });
+  },
+
+  escapeHTML(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[ch]);
   },
 
   // Format ISO → "HH:MM DD/MM/YYYY"
@@ -343,7 +349,7 @@ const SeatTooltip = {
       }
     }
 
-    this._el.innerHTML = `
+        this._el.innerHTML = `
       <div class="stip-name">${name}</div>
       ${badge}
       <div class="stip-details">${detail}</div>
@@ -994,6 +1000,72 @@ const ReturnConfirm = {
 // ─────────────────────────────────────────────
 // BOOKS
 // ─────────────────────────────────────────────
+const TopBorrowedBooks = {
+  period: 'week',
+  labels: { week: '1 tuần', month: '1 tháng', all: 'Từ trước đến nay' },
+
+  async init() {
+    this._ensureMount();
+    await this.load('week');
+  },
+
+  _ensureMount() {
+    if (document.getElementById('top-borrowed-wrap')) return;
+    const grid = document.getElementById('books-grid');
+    if (!grid) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'top-borrowed-wrap';
+    wrap.className = 'top-borrowed-wrap';
+    grid.parentElement.insertBefore(wrap, grid);
+  },
+
+  async load(period) {
+    this.period = period;
+    this._ensureMount();
+    const wrap = document.getElementById('top-borrowed-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = this._shell('<div class="top-borrowed-empty">Đang tải...</div>');
+    try {
+      const items = await Utils.fetchJSON(`/get-top-borrowed-books?period=${period}`);
+      wrap.innerHTML = this._shell(this._list(items));
+    } catch {
+      wrap.innerHTML = this._shell('<div class="top-borrowed-empty">Không tải được top sách</div>');
+    }
+  },
+
+  _shell(content) {
+    return `
+      <div class="top-borrowed-head">
+        <div>
+          <h3>Sách được mượn nhiều</h3>
+          <p>${this.labels[this.period]}</p>
+        </div>
+        <div class="top-borrowed-tabs">
+          ${['week', 'month', 'all'].map(p => `
+            <button class="${this.period === p ? 'active' : ''}" onclick="TopBorrowedBooks.load('${p}')">${this.labels[p]}</button>
+          `).join('')}
+        </div>
+      </div>
+      <div class="top-borrowed-list">${content}</div>`;
+  },
+
+  _list(items) {
+    if (!items.length) return '<div class="top-borrowed-empty">Chưa có lượt mượn trong khoảng này</div>';
+    return items.map((book, idx) => `
+      <div class="top-borrowed-item" onclick="Books.openDetail(${book.id})">
+        <div class="top-borrowed-rank">${idx + 1}</div>
+        <div class="top-borrowed-info">
+          <strong>${Utils.escapeHTML(book.title)}</strong>
+          <span>${Utils.escapeHTML(book.author)}</span>
+        </div>
+        <div class="top-borrowed-count">
+          <strong>${book.periodBorrowCount}</strong>
+          <span>lượt</span>
+        </div>
+      </div>`).join('');
+  },
+};
+
 const Books = {
   COLORS: ['#EAF3DE','#E6F1FB','#FAEEDA','#FBEAF0','#E1F5EE','#FAECE7','#EEEDFE','#F3ECE7'],
   MAX: 3,
@@ -1004,6 +1076,7 @@ const Books = {
       await this._loadRatings();
       CategoryFilter.init();   // cập nhật chip lọc theo chủ đề
       this.render();
+      TopBorrowedBooks.init();
     } catch(e) { console.error('load books:', e); }
   },
 

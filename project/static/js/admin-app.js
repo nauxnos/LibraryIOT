@@ -47,6 +47,12 @@ const Utils = {
     return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
   },
 
+  escapeHTML(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[ch]);
+  },
+
   fmtDatetime(iso) {
     if (!iso) return '—';
     try { return new Date(iso).toLocaleString('vi-VN', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }); }
@@ -849,14 +855,17 @@ const Accounts = {
     const tbody = document.getElementById('accounts-table-body');
     if (!tbody) return;
     tbody.innerHTML = AppState.adminAccounts.map(a => `
-      <tr>
+      <tr class="account-row" onclick="Accounts.openDetail(${a.id})">
         <td>#${a.id}</td>
-        <td><strong>${a.name}</strong></td>
-        <td>${a.email}</td>
-        <td>${a.created}</td>
-        <td><span class="badge ${a.bookings === 'Đã đặt' ? 'warning' : 'info'}">${a.bookings}</span></td>
-        <td><span class="badge ${a.borrows  === 'Đã mượn' ? 'warning' : 'info'}">${a.borrows}</span></td>
-        <td><button class="action-btn delete" onclick="Accounts.delete(${a.id})">🗑️ Xóa</button></td>
+        <td><strong>${Utils.escapeHTML(a.name)}</strong></td>
+        <td>${Utils.escapeHTML(a.email)}</td>
+        <td>${Utils.escapeHTML(a.created)}</td>
+        <td><span class="badge ${a.bookings === '?? ??t' ? 'warning' : 'info'}">${a.bookings}</span></td>
+        <td><span class="badge ${a.borrows === '?? m??n' ? 'warning' : 'info'}">${a.borrows}</span></td>
+        <td>
+          <button class="action-btn view" onclick="event.stopPropagation();Accounts.openDetail(${a.id})">Xem</button>
+          <button class="action-btn delete" onclick="event.stopPropagation();Accounts.delete(${a.id})">Xoá</button>
+        </td>
       </tr>`).join('');
   },
 
@@ -868,18 +877,127 @@ const Accounts = {
   }, 300),
 
   async delete(id) {
-    if (!confirm('Bạn có chắc muốn xóa tài khoản này?')) return;
+    if (!confirm('B?n c? ch?c mu?n x?a t?i kho?n n?y?')) return;
     try {
       const res = await Utils.post('/delete-account', { id });
-      if (res.success) { await this.loadList(); Utils.showToast('Đã xóa tài khoản!', 'success'); }
-      else Utils.showToast('Lỗi khi xóa', 'error');
+      if (res.success) { await this.loadList(); Utils.showToast('?? x?a t?i kho?n!', 'success'); }
+      else Utils.showToast('L?i khi x?a', 'error');
     } catch(e) { console.error(e); }
+  },
+
+  async openDetail(id) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `<div class="modal user-detail-modal">
+      <div class="modal-header">
+        <h3>Chi tiết người dùng</h3>
+        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">×</button>
+      </div>
+      <div class="modal-body"><div class="admin-empty">Đang tải...</div></div>
+    </div>`;
+    document.body.appendChild(overlay);
+
+    try {
+      const data = await Utils.fetchJSON(`/admin-user-detail?user_id=${id}`);
+      this._detailData = data;
+      this._detailOverlay = overlay;
+      this._renderDetail('bookings');
+    } catch {
+      overlay.querySelector('.modal-body').innerHTML = '<div class="admin-empty">Không thể tải thông tin người dùng</div>';
+    }
+  },
+
+  _renderDetail(tab) {
+    const overlay = this._detailOverlay;
+    const data = this._detailData;
+    if (!overlay || !data) return;
+    const user = data.user;
+    const body = overlay.querySelector('.modal-body');
+    body.innerHTML = `
+      <div class="user-detail-head">
+        <div class="user-detail-avatar">${Utils.escapeHTML((user.name || 'U')[0]).toUpperCase()}</div>
+        <div>
+          <div class="user-detail-name">${Utils.escapeHTML(user.name)}</div>
+          <div class="user-detail-email">${Utils.escapeHTML(user.email)}</div>
+          <div class="user-detail-created">Ngày tạo: ${Utils.escapeHTML(user.created || '?')}</div>
+        </div>
+      </div>
+      <div class="user-detail-tabs">
+        <button class="${tab === 'bookings' ? 'active' : ''}" onclick="Accounts._renderDetail('bookings')">Chỗ đã đặt</button>
+        <button class="${tab === 'borrows' ? 'active' : ''}" onclick="Accounts._renderDetail('borrows')">Sách đã mượn</button>
+        <button class="${tab === 'password' ? 'active' : ''}" onclick="Accounts._renderDetail('password')">Đổi mật khẩu</button>
+      </div>
+      <div class="user-detail-panel">${this._detailPanel(tab)}</div>`;
+  },
+
+  _detailPanel(tab) {
+    if (tab === 'bookings') return this._bookingPanel();
+    if (tab === 'borrows') return this._borrowPanel();
+    return this._passwordPanel();
+  },
+
+  _bookingPanel() {
+    const items = this._detailData.bookings || [];
+    if (!items.length) return '<div class="admin-empty">Người dùng chưa đặt chỗ nào</div>';
+    return items.map(b => `
+      <div class="user-detail-item">
+        <div>
+          <strong>${Utils.escapeHTML(b.seatName)}</strong>
+          <span>${Utils.escapeHTML(b.startFmt)} - ${Utils.escapeHTML(b.endFmt)}</span>
+        </div>
+        <span class="badge ${b.active ? 'warning' : 'info'}">${b.active ? 'Đang hiệu lực' : 'Đã kết thúc'}</span>
+      </div>`).join('');
+  },
+
+  _borrowPanel() {
+    const items = this._detailData.borrows || [];
+    if (!items.length) return '<div class="admin-empty">Người dùng chưa mượn sách nào</div>';
+    return items.map(b => `
+      <div class="user-detail-item">
+        <div>
+          <strong>${Utils.escapeHTML(b.title)}</strong>
+          <span>${Utils.escapeHTML(b.author)}</span>
+          <span>Mượn: ${Utils.escapeHTML(b.borrowedFmt)} - Hạn trả: ${Utils.escapeHTML(b.due)}</span>
+          ${b.returnedFmt ? `<span>Đã trả: ${Utils.escapeHTML(b.returnedFmt)}</span>` : ''}
+        </div>
+        <span class="badge ${b.overdue ? 'danger' : b.active ? 'warning' : 'success'}">${b.overdue ? 'Quá hạn' : b.active ? 'Đang mượn' : 'Đã trả'}</span>
+      </div>`).join('');
+  },
+
+  _passwordPanel() {
+    return `
+      <div class="form-group">
+        <label>Mật khẩu mới</label>
+        <input type="password" id="admin-user-new-password" placeholder="Tối thiểu 6 kí tự" />
+      </div>
+      <div class="form-group">
+        <label>Nhập lại mật khẩu</label>
+        <input type="password" id="admin-user-confirm-password" placeholder="Nhập lại mật khẩu mới" />
+      </div>
+      <button class="btn-primary" onclick="Accounts.changePassword()">Cập nhật mật khẩu</button>`;
+  },
+
+  async changePassword() {
+    const userId = this._detailData?.user?.id;
+    const password = document.getElementById('admin-user-new-password')?.value || '';
+    const confirmPassword = document.getElementById('admin-user-confirm-password')?.value || '';
+    if (password.length < 6) return Utils.showToast('Mật khẩu cần ít nhất 6 ký tự', 'error');
+    if (password !== confirmPassword) return Utils.showToast('Mật khẩu nhập lại không khớp', 'error');
+    try {
+      const res = await Utils.post('/admin-change-user-password', { userId, password });
+      if (res.success) {
+        Utils.showToast('Đã cập nhật mật khẩu người dùng', 'success');
+        this._detailOverlay?.remove();
+      } else {
+        Utils.showToast('Không thể cập nhật mật khẩu', 'error');
+      }
+    } catch {
+      Utils.showToast('Lỗi kết nối server', 'error');
+    }
   },
 };
 
-// ─────────────────────────────────────────────
-// PRICING  (localStorage — not persisted to DB)
-// ─────────────────────────────────────────────
 const Pricing = {
   LABELS: { morning: 'sáng', afternoon: 'chiều', evening: 'tối' },
   update(period) {

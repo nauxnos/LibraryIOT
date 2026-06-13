@@ -202,6 +202,43 @@ def delete_account():
     except Exception as e:
         return jsonify({"success": False, "error": "ServerError"}), 500
 
+@app.route("/admin-user-detail")
+@admin_required
+def admin_user_detail():
+    try:
+        user_id = request.args.get("user_id", type=int)
+        if not user_id:
+            return jsonify({"error": "MissingUserID"}), 400
+        user = dbHandler.getUserById(user_id)
+        if not user:
+            return jsonify({"error": "UserNotFound"}), 404
+        return jsonify({
+            "user": user,
+            "bookings": dbHandler.getUserBookings(user_id),
+            "borrows": dbHandler.getUserBorrowsHistory(user_id),
+        })
+    except Exception as e:
+        print(f"admin_user_detail error: {e}")
+        return jsonify({"error": "ServerError"}), 500
+
+@app.route("/admin-change-user-password", methods=["POST"])
+@admin_required
+def admin_change_user_password():
+    try:
+        data = request.get_json()
+        user_id = data.get("userId")
+        password = data.get("password", "")
+        if not user_id or not password:
+            return jsonify({"success": False, "error": "MissingFields"})
+        if len(password) < 6:
+            return jsonify({"success": False, "error": "PasswordTooShort"})
+        if dbHandler.updateUserPasswordById(user_id, password):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "UserNotFound"})
+    except Exception as e:
+        print(f"admin_change_user_password error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
 @app.route("/save-layout", methods=["POST"])
 @admin_required
 def save_layout():
@@ -561,6 +598,18 @@ def get_booklist_with_categories():
     try:
         return jsonify(dbHandler.getAllBooksWithCategories())
     except Exception as e:
+        return jsonify({"error": "ServerError"}), 500
+
+@app.route("/get-top-borrowed-books")
+@login_required
+def get_top_borrowed_books():
+    try:
+        period = request.args.get("period", "week")
+        if period not in ("week", "month", "all"):
+            period = "week"
+        return jsonify(dbHandler.getTopBorrowedBooks(period))
+    except Exception as e:
+        print(f"get_top_borrowed_books error: {e}")
         return jsonify({"error": "ServerError"}), 500
 
 # ===== STATISTICS =====

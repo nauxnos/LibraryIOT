@@ -719,6 +719,80 @@ body {
   border-top: 1px solid var(--border);
   justify-content: flex-end;
 }
+
+.account-row { cursor: pointer; }
+.account-row:hover { background: rgba(45,90,61,.06) !important; }
+.user-detail-modal { max-width: min(760px, 94vw); }
+.user-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.user-detail-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--green);
+  color: #fff;
+  font-weight: 700;
+  font-size: 20px;
+}
+.user-detail-name { font-weight: 700; color: var(--text); font-size: 18px; }
+.user-detail-email,
+.user-detail-created { color: var(--text-3); font-size: 13px; margin-top: 3px; }
+.user-detail-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.user-detail-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.user-detail-tabs button.active {
+  color: var(--green);
+  border-bottom-color: var(--green);
+}
+.user-detail-panel {
+  display: grid;
+  gap: 10px;
+}
+.user-detail-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255,255,255,.5);
+}
+.user-detail-item > div {
+  display: grid;
+  gap: 4px;
+}
+.user-detail-item span {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.admin-empty {
+  color: var(--text-3);
+  text-align: center;
+  padding: 24px;
+}
 .btn-secondary {
   padding: 9px 20px;
   background: transparent;
