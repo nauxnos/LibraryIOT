@@ -71,7 +71,7 @@ class DatabaseHandler:
             return False
 
     def creatSeatBooking(self, unUserID, unSeatID, tmStartTime, tmEndTime):
-          # Kiểm tra nếu user đã tồn tại
+        # Kiểm tra nếu user đã tồn tại
         self.cursor.execute("SELECT * FROM User WHERE UserID = ?", (unUserID,))
         blUserFind = self.cursor.fetchone()
         # Kiểm tra nếu seat đã tồn tại
@@ -126,8 +126,20 @@ class DatabaseHandler:
         self.commit()
         return True
 
-    def deleteUser(self, userID):
-        pass
+    def deleteUser(self, unUserID):
+        # kiem tra xem user co dang muon sach hay dat ghe khong, neu co thi khong cho xoa
+        self.cursor.execute(
+        "SELECT UserName FROM User WHERE UserID = ?",
+        (unUserID,))
+        objResult = self.cursor.fetchone()
+        if objResult is None:
+            return False
+        # xoa ban ghi book borrow
+        self.cursor.execute(
+        "DELETE FROM User WHERE UserID = ?",
+        (unUserID, ))
+        self.commit()
+        return True
 
     def deleteBook(self, bookID):
         pass
@@ -136,6 +148,7 @@ class DatabaseHandler:
         pass
 
     def deleteBookBorrow(self, unBorrowID):
+        # lay bookID tu borrowID
         self.cursor.execute(
         "SELECT BookID FROM BookManager WHERE BookBorrowID = ?",
         (unBorrowID,))
@@ -151,6 +164,7 @@ class DatabaseHandler:
         return self.updateBookStatus(unBookID, True)
 
     def deleteSeatBooking(self, unSeatBookingID):
+        # lay seatID tu seatBookingID
         self.cursor.execute(
         "SELECT SeatID FROM SeatManager WHERE SeatBookingID = ?",
         (unSeatBookingID,))
@@ -164,3 +178,86 @@ class DatabaseHandler:
         (unSeatBookingID, ))
         self.commit()
         return self.updateSeatStatus(unSeatID, True)
+    
+    def getAvailableSeats(self):
+        # lay danh sach cac ghe con trong (Status = True)
+        self.cursor.execute("SELECT * FROM Seat WHERE Status = 1")
+        return self.cursor.fetchall()
+    
+    def isSeatFull(self):
+        # kiem tra xem he thong da het ghe chua
+        self.cursor.execute("SELECT COUNT(*) FROM Seat WHERE Status = 1")
+        return self.cursor.fetchone()[0] == 0
+    
+    def getSeatBooking(self, unSeatID):
+        # lay thong tin booking hien tai cua mot ghe (UserID, thoi gian booking)
+        self.cursor.execute("""
+            SELECT sm.UserID, sm.StartTime, sm.EndTime 
+            FROM SeatManager sm
+            WHERE sm.SeatID = ? AND sm.EndTime IS NULL
+        """, (unSeatID,))
+        return self.cursor.fetchone()
+    
+    def getAvailableBooks(self):
+        # lay danh sach con trong thu vien (chua duoc muon)
+        self.cursor.execute("SELECT * FROM Book WHERE Status = 1")
+        return self.cursor.fetchall()
+    
+    def getBorrowedBooks(self):
+        # lay danh sach cac book dang duoc muon (Status = False)
+        self.cursor.execute("SELECT * FROM Book WHERE Status = 0")
+        return self.cursor.fetchall()
+    
+    def getUserBorrowedBooks(self, unUserID):
+        # lay danh sach cac book dang duoc muon boi mot user
+        self.cursor.execute("""
+            SELECT b.BookID, b.BookName, bm.StartTime, bm.EndTime 
+            FROM BookManager bm
+            JOIN Book b ON bm.BookID = b.BookID
+            WHERE bm.UserID = ? AND bm.EndTime IS NULL
+        """, (unUserID,))
+        return self.cursor.fetchall()
+    
+    def getDueTomorrow(self, date):
+        # lay danh sach cac book se het han vao ngay mai (phuc vu gui thong bao)
+        tomorrow = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        self.cursor.execute("""
+            SELECT b.BookID, b.BookName, bm.StartTime, bm.EndTime 
+            FROM BookManager bm
+            JOIN Book b ON bm.BookID = b.BookID
+            WHERE bm.EndTime = ?
+        """, (tomorrow,))
+        return self.cursor.fetchall()
+    
+    def getOverdueBooks(self, current_time):
+        # lay danh sach book da qua han (EndTime < current_time)
+        self.cursor.execute("""
+            SELECT b.BookID, b.BookName, bm.StartTime, bm.EndTime 
+            FROM BookManager bm
+            JOIN Book b ON bm.BookID = b.BookID
+            WHERE bm.EndTime < ? AND bm.EndTime IS NOT NULL
+        """, (current_time,))
+        return self.cursor.fetchall()
+    
+    def getBorrowerInfo(self, unBookID):
+        # lay thong tin nguoi muon sach cu the
+        self.cursor.execute("""
+            SELECT u.UserID, u.UserName, u.Email, bm.StartTime, bm.EndTime 
+            FROM BookManager bm
+            JOIN User u ON bm.UserID = u.UserID
+            WHERE bm.BookID = ? AND bm.EndTime IS NULL
+        """, (unBookID,))
+        return self.cursor.fetchone()
+    
+    def returnBook(self, unBookID, unUserID):
+        # xu ly tra sach: cap nhat trang thai sach + xoa/cap nhat record muon
+        # cap nhat trang thai sach thanh available
+         self.cursor.execute("""
+            UPDATE Book SET Status = 1 WHERE BookID = ?
+        """, (unBookID,))
+        # cap nhat thoi gian ket thuc muon trong BookManager
+        self.cursor.execute("""
+            UPDATE BookManager SET EndTime = ? WHERE BookID = ? AND UserID = ? AND EndTime IS NULL
+        """, (datetime.now(), unBookID, unUserID))
+        self.commit()
+        return True
