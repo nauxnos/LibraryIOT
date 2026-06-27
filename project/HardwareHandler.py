@@ -93,8 +93,8 @@ class HardwareHandler:
                     print(f"[RFID] Pending cho sách {book_id} đã hết hạn")
                     return
 
-                user_id = pending["userId"]
-                due_days = 14
+                user_id  = pending["userId"]
+                due_days = pending.get("dueDays", 14)  # user ằ chọn khi mượn
                 start_dt = datetime.now()
                 end_dt   = start_dt + timedelta(days=due_days)
 

@@ -327,6 +327,20 @@ class DatabaseHandler:
                 ORDER BY StartTime DESC
             """, (unSeatID,))
             return [{"start": row[0], "end": row[1]} for row in cursor.fetchall()]
+        
+    def getActiveBookedSeatIds(self) -> set:
+        """
+        Trả về set các SeatID đang trong khung giờ booking tại thời điểm hiện tại.
+        Ghế "active" = có booking với StartTime <= now < EndTime.
+        """
+        now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT DISTINCT SeatID
+                FROM SeatManager
+                WHERE StartTime <= ? AND EndTime > ?
+            """, (now, now))
+            return {row[0] for row in cursor.fetchall()}
 
     # ===== BOOK BORROWING =====
 

@@ -682,13 +682,15 @@ def start_borrow():
         if not book or not book["status"]:
             return jsonify({"success": False, "error": "BookUnavailable"})
 
-        expires = datetime.now().timestamp() + 60   # 60 giây timeout
+        due_days = max(1, min(int(data.get("dueDays", 14)), 30))  # clamp 1-30
+        expires  = datetime.now().timestamp() + 60   # 60 giây timeout
 
         with _pending_lock:
             pending_borrow[book_id] = {
                 "userId":   user_id,
                 "userName": session["user"]["name"],
                 "expires":  expires,
+                "dueDays":  due_days,
             }
             # Xóa kết quả cũ nếu có
             rfid_result.pop(book_id, None)
@@ -916,103 +918,6 @@ def send_email_route():
     except Exception as e:
         print(f"send-email error: {e}")
         return jsonify({"success": False, "error": "ServerError"}), 500
-
-# ═══════════════════════════════════════════════════
-# QUÊN MẬT KHẨU — OTP 6 số qua email (hết hạn 10 phút)
-# ═══════════════════════════════════════════════════
-import secrets, random
-from datetime import timedelta
-
-# { email: {"otp": str, "expires": datetime} }
-_otp_store: dict = {}
-
-@app.route("/forgot-password-page")
-def forgot_password_page():
-    return render_template("forgot_password.html")
-
-@app.route("/forgot-password", methods=["POST"])
-def forgot_password():
-    """Tạo OTP 6 số, gửi qua email. Luôn trả success để không lộ email."""
-    try:
-        email = (request.get_json() or {}).get("email", "").strip().lower()
-        if email and dbHandler.getUserName(email):
-            otp = f"{random.randint(0, 999999):06d}"
-            _otp_store[email] = {
-                "otp":     otp,
-                "expires": datetime.now() + timedelta(minutes=10),
-            }
-            subject   = "[Thư Viện Số] Mã xác nhận đặt lại mật khẩu"
-            body_html = f"""
-                <p style="color:#555;line-height:1.7">Xin chào,</p>
-                <p style="color:#555;line-height:1.7">
-                  Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản
-                  <strong>{email}</strong>.
-                </p>
-                <div style="text-align:center;margin:28px 0">
-                  <div style="display:inline-block;background:#f0f7f3;border:2px dashed #2D5A3D;
-                              border-radius:14px;padding:18px 36px">
-                    <div style="font-size:11px;color:#888;letter-spacing:2px;
-                                text-transform:uppercase;margin-bottom:8px">Mã xác nhận</div>
-                    <div style="font-size:40px;font-weight:700;letter-spacing:10px;
-                                color:#2D5A3D;font-family:monospace">{otp}</div>
-                  </div>
-                </div>
-                <p style="color:#888;font-size:13px;line-height:1.6;text-align:center">
-                  Mã có hiệu lực trong <strong>10 phút</strong>.<br>
-                  Nếu bạn không yêu cầu điều này, hãy bỏ qua email này.
-                </p>"""
-            _send_email(email, subject, _email_template(subject, body_html))
-        return jsonify({"success": True})
-    except Exception as e:
-        print(f"[forgot-password] {e}")
-        return jsonify({"success": True})
-
-
-@app.route("/verify-otp", methods=["POST"])
-def verify_otp():
-    """Kiểm tra OTP — chỉ xác nhận, chưa đổi mật khẩu."""
-    try:
-        data  = request.get_json() or {}
-        email = data.get("email", "").strip().lower()
-        otp   = data.get("otp", "").strip()
-        record = _otp_store.get(email)
-        if not record or datetime.now() > record["expires"]:
-            _otp_store.pop(email, None)
-            return jsonify({"success": False, "error": "InvalidOTP"})
-        if record["otp"] != otp:
-            return jsonify({"success": False, "error": "InvalidOTP"})
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": "ServerError"}), 500
-
-
-@app.route("/reset-password", methods=["POST"])
-def reset_password():
-    """Xác thực OTP lần cuối + cập nhật mật khẩu mới."""
-    try:
-        data     = request.get_json() or {}
-        email    = data.get("email", "").strip().lower()
-        otp      = data.get("otp", "").strip()
-        password = data.get("password", "")
-
-        if len(password) < 6:
-            return jsonify({"success": False, "error": "PasswordTooShort"})
-
-        record = _otp_store.get(email)
-        if not record or datetime.now() > record["expires"] or record["otp"] != otp:
-            _otp_store.pop(email, None)
-            return jsonify({"success": False, "error": "InvalidOTP"})
-
-        name = dbHandler.getUserName(email) or ""
-        if not dbHandler.updateUserInfo(email, name, password):
-            return jsonify({"success": False, "error": "UpdateFailed"})
-
-        _otp_store.pop(email, None)
-        return jsonify({"success": True})
-    except Exception as e:
-        print(f"[reset-password] {e}")
-        return jsonify({"success": False, "error": "ServerError"}), 500
-
 
 @app.errorhandler(404)
 def not_found(e):

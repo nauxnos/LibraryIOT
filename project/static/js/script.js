@@ -1665,10 +1665,13 @@ const RfidBorrow = {
   _overlay: null,
 
   async start(book) {
-    // Gọi /start-borrow trước
+    // Bước 0: chọn hạn trả
+    const dueDays = await this._pickDueDate(book);
+    if (dueDays === null) return;
+
     let res;
     try {
-      res = await Utils.post('/start-borrow', { bookId: book.id });
+      res = await Utils.post('/start-borrow', { bookId: book.id, dueDays });
     } catch {
       Utils.showToast('Lỗi kết nối server', 'error'); return;
     }
@@ -1682,9 +1685,74 @@ const RfidBorrow = {
       return;
     }
 
-    this._bookId = book.id;
+    this._bookId  = book.id;
+    this._dueDays = dueDays;
     this._showSheet(book, res.expires);
     this._poll();
+  },
+
+  // Sheet chọn hạn trả - dùng lại rfid-overlay/rfid-modal CSS
+  _pickDueDate(book) {
+    return new Promise(resolve => {
+      const { overlay, modal } = Utils.createSheet('rfid-overlay', 'rfid-modal', () => close(null));
+
+      const today   = new Date();
+      const fmt     = d => d.toISOString().slice(0, 10);
+      const minDate = new Date(today); minDate.setDate(today.getDate() + 1);
+      const maxDate = new Date(today); maxDate.setDate(today.getDate() + 30);
+      const defDate = new Date(today); defDate.setDate(today.getDate() + 14);
+
+      modal.innerHTML = `
+        <div class="rfid-handle"></div>
+        <div class="rfid-body" style="padding:20px 20px 0">
+          <div class="rfid-book-title">${Utils.escapeHTML(book.title)}</div>
+          <div class="rfid-book-author">${Utils.escapeHTML(book.author)}</div>
+          <div style="height:1px;background:var(--border);margin:16px 0"></div>
+          <div style="font-size:12px;font-weight:600;color:var(--text-3);
+                      text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+            Chọn ngày trả sách
+          </div>
+          <input type="date" id="due-input"
+                 value="${fmt(defDate)}" min="${fmt(minDate)}" max="${fmt(maxDate)}"
+                 style="width:100%;padding:11px 14px;border:1.5px solid var(--border-2);
+                        border-radius:10px;font-size:15px;color:var(--text);
+                        background:var(--surface);box-sizing:border-box;outline:none;
+                        font-family:inherit;margin-bottom:10px"/>
+          <div style="font-size:13px;color:var(--text-3);margin-bottom:16px;text-align:center">
+            Tối đa 30 ngày · Hạn trả: <strong id="due-label" style="color:var(--text)">14 ngày</strong>
+          </div>
+        </div>
+        <div class="rfid-footer" style="display:flex;gap:10px;padding:16px 20px">
+          <button class="rfid-cancel-btn" style="flex:1" id="due-cancel">Hủy</button>
+          <button class="rfid-cancel-btn" id="due-confirm"
+                  style="flex:2;background:var(--accent); color: #fff;font-weight:600">
+            Xác nhận →
+          </button>
+        </div>`;
+
+      Utils.openSheet(overlay, modal);
+
+      const input = modal.querySelector('#due-input');
+      const label = modal.querySelector('#due-label');
+
+      const updateLabel = () => {
+        const diff = Math.round((new Date(input.value) - today) / 86400000);
+        label.textContent = diff + ' ngày';
+      };
+      input.addEventListener('change', updateLabel);
+      updateLabel();
+
+      const close = val => { Utils.closeSheet(overlay, modal); resolve(val); };
+
+      modal.querySelector('#due-cancel').onclick  = () => close(null);
+      modal.querySelector('#due-confirm').onclick = () => {
+        const diff = Math.round((new Date(input.value) - today) / 86400000);
+        if (diff < 1 || diff > 30) {
+          Utils.showToast('Hạn trả phải từ 1 đến 30 ngày', 'error'); return;
+        }
+        close(diff);
+      };
+    });
   },
 
   _showSheet(book, expires) {
