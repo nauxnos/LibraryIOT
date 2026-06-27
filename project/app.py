@@ -776,6 +776,110 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+# ═══════════════════════════════════════════════════════════════
+# THÊM VÀO app.py — Quên mật khẩu
+# Chèn đoạn này sau phần import smtplib (khoảng dòng 775)
+# ═══════════════════════════════════════════════════════════════
+
+import secrets
+from datetime import datetime, timedelta
+
+# Lưu token trong memory: { token: {"email": str, "expires": datetime} }
+# Nếu muốn persist khi restart → lưu vào SQLite (xem ghi chú cuối file)
+_reset_tokens: dict = {}
+
+@app.route("/forgot-password-page")
+def forgot_password_page():
+    """Hiển thị trang quên mật khẩu."""
+    return render_template("forgot_password.html")
+
+@app.route("/forgot-password", methods=["POST"])
+def forgot_password():
+    """
+    Nhận email → tạo token → gửi link qua Gmail.
+    Luôn trả về success=True để không lộ email có tồn tại hay không.
+    """
+    try:
+        data  = request.get_json()
+        email = data.get("email", "").strip().lower()
+
+        if not email or not validate_email(email):
+            return jsonify({"success": True})  # silent fail
+
+        # Kiểm tra email có tồn tại không (nội bộ)
+        if dbHandler.getUserName(email):
+            token   = secrets.token_urlsafe(32)
+            expires = datetime.now() + timedelta(minutes=30)
+            _reset_tokens[token] = {"email": email, "expires": expires}
+
+            reset_url = f"{request.host_url}forgot-password-page?token={token}"
+            subject   = "[Thư Viện Số] Đặt lại mật khẩu"
+            body_html = f"""
+                <p style="color:#555;line-height:1.7">Xin chào,</p>
+                <p style="color:#555;line-height:1.7">
+                  Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản
+                  <strong>{email}</strong>.
+                </p>
+                <div style="text-align:center;margin:24px 0">
+                  <a href="{reset_url}"
+                     style="background:#2D5A3D;color:#fff;padding:14px 28px;
+                            border-radius:10px;text-decoration:none;font-weight:600;
+                            font-size:15px;display:inline-block">
+                    Đặt lại mật khẩu
+                  </a>
+                </div>
+                <p style="color:#888;font-size:13px;line-height:1.6">
+                  Link có hiệu lực trong <strong>30 phút</strong>.<br>
+                  Nếu bạn không yêu cầu điều này, hãy bỏ qua email này.
+                </p>
+                <p style="color:#bbb;font-size:12px;word-break:break-all">
+                  Hoặc copy link: {reset_url}
+                </p>"""
+
+            _send_email(email, subject, _email_template(subject, body_html))
+
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print(f"[forgot-password] error: {e}")
+        return jsonify({"success": True})  # vẫn silent để bảo mật
+
+
+@app.route("/reset-password", methods=["POST"])
+def reset_password():
+    """Nhận token + mật khẩu mới → cập nhật DB."""
+    try:
+        data     = request.get_json()
+        token    = data.get("token", "").strip()
+        password = data.get("password", "")
+
+        if not token or not password:
+            return jsonify({"success": False, "error": "MissingFields"})
+        if len(password) < 6:
+            return jsonify({"success": False, "error": "PasswordTooShort"})
+
+        record = _reset_tokens.get(token)
+        if not record:
+            return jsonify({"success": False, "error": "InvalidToken"})
+        if datetime.now() > record["expires"]:
+            _reset_tokens.pop(token, None)
+            return jsonify({"success": False, "error": "InvalidToken"})
+
+        email = record["email"]
+        name  = dbHandler.getUserName(email) or ""
+
+        # Dùng lại updateUserInfo (cập nhật password, giữ nguyên tên)
+        if not dbHandler.updateUserInfo(email, name, password):
+            return jsonify({"success": False, "error": "UpdateFailed"})
+
+        # Xoá token sau khi dùng
+        _reset_tokens.pop(token, None)
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print(f"[reset-password] error: {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
 def _send_email(to_email: str, subject: str, html_body: str) -> bool:
     """Send a single email via Gmail SMTP. Returns True on success."""
     gmail_user = os.getenv("GMAIL_USER", "")
