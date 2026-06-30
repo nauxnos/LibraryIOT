@@ -919,6 +919,102 @@ def send_email_route():
         print(f"send-email error: {e}")
         return jsonify({"success": False, "error": "ServerError"}), 500
 
+# ===================================================
+# QUEN MAT KHAU - OTP 6 so qua email (het han 10 phut)
+# ===================================================
+import secrets, random
+
+# { email: {"otp": str, "expires": datetime} }
+_otp_store: dict = {}
+
+@app.route("/forgot-password-page")
+def forgot_password_page():
+    return render_template("forgot_password.html")
+
+@app.route("/forgot-password", methods=["POST"])
+def forgot_password():
+    """Tao OTP 6 so, gui qua email. Luon tra success de khong lo email."""
+    try:
+        email = (request.get_json() or {}).get("email", "").strip().lower()
+        if email and dbHandler.getUserName(email):
+            otp = f"{random.randint(0, 999999):06d}"
+            _otp_store[email] = {
+                "otp":     otp,
+                "expires": datetime.now() + timedelta(minutes=10),
+            }
+            subject   = "[Thu Vien So] Ma xac nhan dat lai mat khau"
+            body_html = f"""
+                <p style="color:#555;line-height:1.7">Xin chao,</p>
+                <p style="color:#555;line-height:1.7">
+                  Chung toi nhan duoc yeu cau dat lai mat khau cho tai khoan
+                  <strong>{email}</strong>.
+                </p>
+                <div style="text-align:center;margin:28px 0">
+                  <div style="display:inline-block;background:#f0f7f3;border:2px dashed #2D5A3D;
+                              border-radius:14px;padding:18px 36px">
+                    <div style="font-size:11px;color:#888;letter-spacing:2px;
+                                text-transform:uppercase;margin-bottom:8px">Ma xac nhan</div>
+                    <div style="font-size:40px;font-weight:700;letter-spacing:10px;
+                                color:#2D5A3D;font-family:monospace">{otp}</div>
+                  </div>
+                </div>
+                <p style="color:#888;font-size:13px;line-height:1.6;text-align:center">
+                  Ma co hieu luc trong <strong>10 phut</strong>.<br>
+                  Neu ban khong yeu cau dieu nay, hay bo qua email nay.
+                </p>"""
+            _send_email(email, subject, _email_template(subject, body_html))
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"[forgot-password] {e}")
+        return jsonify({"success": True})
+
+
+@app.route("/verify-otp", methods=["POST"])
+def verify_otp():
+    """Kiem tra OTP - chi xac nhan, chua doi mat khau."""
+    try:
+        data  = request.get_json() or {}
+        email = data.get("email", "").strip().lower()
+        otp   = data.get("otp", "").strip()
+        record = _otp_store.get(email)
+        if not record or datetime.now() > record["expires"]:
+            _otp_store.pop(email, None)
+            return jsonify({"success": False, "error": "InvalidOTP"})
+        if record["otp"] != otp:
+            return jsonify({"success": False, "error": "InvalidOTP"})
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
+
+@app.route("/reset-password", methods=["POST"])
+def reset_password():
+    """Xac thuc OTP lan cuoi + cap nhat mat khau moi."""
+    try:
+        data     = request.get_json() or {}
+        email    = data.get("email", "").strip().lower()
+        otp      = data.get("otp", "").strip()
+        password = data.get("password", "")
+
+        if len(password) < 6:
+            return jsonify({"success": False, "error": "PasswordTooShort"})
+
+        record = _otp_store.get(email)
+        if not record or datetime.now() > record["expires"] or record["otp"] != otp:
+            _otp_store.pop(email, None)
+            return jsonify({"success": False, "error": "InvalidOTP"})
+
+        name = dbHandler.getUserName(email) or ""
+        if not dbHandler.updateUserInfo(email, name, password):
+            return jsonify({"success": False, "error": "UpdateFailed"})
+
+        _otp_store.pop(email, None)
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"[reset-password] {e}")
+        return jsonify({"success": False, "error": "ServerError"}), 500
+
+
 @app.errorhandler(404)
 def not_found(e):
     return render_template("login.html"), 404
