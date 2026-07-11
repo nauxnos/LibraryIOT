@@ -37,16 +37,40 @@ class HardwareHandler:
 
     # ── Đọc khoảng cách tất cả ghế ─────────────────────────────────────────────
     def getDistance(self):
-        """Trả về [(seatID, distance_cm | None)]"""
-        thresholds = self._loadThresholds()
+        """
+        Trả về [(seatID, distance_cm | None)].
+        Chỉ đo cảm biến + bật đèn cho ghế đang trong khung giờ booking hiện tại.
+        Ghế không được book → tắt đèn, không đo (trả về None).
+        """
+        thresholds     = self._loadThresholds()
+        activeSeatIds  = self._getActiveBookedSeatIds()
         result = []
         for sensor in self.lstSR04Sensors:
+            threshold = thresholds.get(sensor.unSeatID, 50)
+
+            if sensor.unSeatID not in activeSeatIds:
+                # Ghế không trong khung giờ booking → tắt đèn, bỏ qua đo
+                sensor.updateLED(None, threshold)
+                result.append((sensor.unSeatID, None))
+                continue
+
             dist = sensor.measure()
             # Truyền threshold vào updateLED — bật đèn khi có người trong ngưỡng
-            threshold = thresholds.get(sensor.unSeatID, 50)
             sensor.updateLED(dist, threshold)
             result.append((sensor.unSeatID, dist))
         return result
+
+    # ── Lấy danh sách ghế đang trong khung giờ booking hiện tại ─────────────────
+    def _getActiveBookedSeatIds(self) -> set:
+        try:
+            from app import dbHandler as _db
+        except ImportError:
+            return set()
+        try:
+            return _db.getActiveBookedSeatIds()
+        except Exception as e:
+            print(f"[HardwareHandler] Lỗi getActiveBookedSeatIds: {e}")
+            return set()
 
     # ── Đọc thẻ RFID ────────────────────────────────────────────────────────────
     def readCard(self):
@@ -151,15 +175,19 @@ class HardwareHandler:
         except ImportError:
             return
 
-        thresholds = self._loadThresholds()
+        thresholds    = self._loadThresholds()
+        activeSeatIds = self._getActiveBookedSeatIds()
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
         for seat_id, dist in readings:
-            thresh   = thresholds.get(seat_id, 50)
-            occupied = dist is not None and dist < thresh
+            thresh    = thresholds.get(seat_id, 50)
+            isBooked  = seat_id in activeSeatIds
+            # Ghế không trong khung giờ booking → luôn coi như không có người,
+            # bất kể cảm biến đọc được gì (web sẽ không hiển thị "đang có người")
+            occupied  = isBooked and dist is not None and dist < thresh
             presence_state[seat_id] = {
                 "occupied":   occupied,
-                "distance":   dist,
+                "distance":   dist if isBooked else None,
                 "threshold":  thresh,
                 "updated_at": now,
             }
